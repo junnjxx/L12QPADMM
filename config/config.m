@@ -4,17 +4,17 @@ function cfg = config()
 % restricted to cfg.methods.run.
 cfg=struct();
 %% Methods to run
-cfg.methods.run=["matrix"];
-%% Problem instance 
+cfg.methods.run=["Lp"];
+%% Problem instance
 cfg.data.profile="custom";
-cfg.data.group_sizes=[20,25,33,22];
+cfg.data.group_sizes=[48,47,46,44,43,56,54,57,50,55]; % 4:[20,25,33,22] 10:[48,47,46,44,43,56,54,57,50,55]
 cfg.data.dim_x=100;
 cfg.data.mnist_dir="";
 cfg.data.mnist_per_digit=100;
 cfg.data.mnist_normalize=true;
 cfg.data.sparsity_density=4e-3;
 cfg.data.linear_relative_noise=1e-1;
-cfg.batch.size=4;
+cfg.batch.size=10;
 cfg.batch.allow_truncation=false;
 %% Matrix solver
 cfg.matrix.c=10;
@@ -25,15 +25,29 @@ cfg.matrix.eta=0.01;
 % The current paper requires tau_X>0 but does not state one unique numerical value.
 % Use this as the experiment parameter and change it explicitly if needed.
 cfg.matrix.tau_X=0.00001;
-cfg.matrix.max_iter=3000000;
+cfg.matrix.max_iter=2000000;
 cfg.matrix.tol=1e-5;
 %% eta continuation
-% -1 -> -0.5 -> 0 -> 0.01 -> 0.011 -> ... -> 0.4
+% -1 -> -0.5 -> 0 -> 0.01 -> 0.011 -> ... -> eta_max
 cfg.matrix.eta_adapt_enabled=true;
-cfg.matrix.eta_stage_initial=-1;
+cfg.matrix.eta_stage_initial=-10;
 cfg.matrix.eta_stagnation_iters=1000;
 cfg.matrix.eta_growth_factor=1.1;
-% cfg.matrix.eta_max=0.4;
+% eta_max is computed at runtime from the current problem matrix:
+%   eta_max = 4*||A||_2*(1+1e-6),
+% so that eta_max is strictly above the paper threshold 4||A||_2.
+cfg.matrix.eta_max=[];
+%% nearest assignment search diagnostics
+% Every search_round ADMM iterations, solve exactly
+%   min_{P in F1} ||P-X^k||_F,
+% where F1 is the balanced binary assignment set.
+% The exact balanced assignment is obtained by a Hungarian solve after
+% expanding each batch label into batch_size identical slots.
+cfg.matrix.search_assignment_enabled=true;
+cfg.matrix.search_round=1000;
+% true: print each search online, including per-search and cumulative Hungarian time.
+% Final matches_final / stabilization summary is printed after the final assignment is known.
+cfg.matrix.search_verbose=true;
 %% stopping
 cfg.matrix.stop_check_interval=10;
 %% early_exist
@@ -45,9 +59,9 @@ cfg.matrix.early_exist_interval=10;
 cfg.matrix.init_mode="uniform";
 cfg.matrix.lp_init_variant="alg2";
 %% clean mode
-cfg.matrix.matrix_clean=true;
-cfg.matrix.matrix_detail=false;
-cfg.matrix.matrix_clean_fast=true;
+cfg.matrix.matrix_clean=false;
+cfg.matrix.matrix_detail=true;
+cfg.matrix.matrix_clean_fast=false;
 %% MEX solver
 % IMPORTANT: the current MEX kernel is legacy and does not implement the
 % paper-aligned X-first update with tau_X. Keep false until C++ is updated.
@@ -84,25 +98,43 @@ cfg.matrix.epsikkt=1e-3;
 cfg.matrix.vc_restarts=10;
 cfg.matrix.vc_seed_base=9001;
 %% Lp baseline
+% Jiang-Liu-Wen (2016) balanced-assignment adaptation.
+%
+% Main paper numerical parameters from Section 6.1:
+%   p = 0.75 in subsequent experiments;
+%   eps0 = 0.1, eps_min = 1e-3, sigma_max = 1e6, gamma = 0.9;
+%   tol_outer = 1e-3;
+%   alpha0 = 1e-3, theta = 1e-4, delta = 0.5, eta = 0.85;
+%   tau_x0 = 1e-3, tau_f0 = 1e-6;
+%   tau_x_min = 1e-5, tau_f_min = 1e-8.
+% Lp-Alg2 uses greedy balanced rounding + fast N2-best.
+% Lp-bs disables the INTERNAL N2-best refinement.
+%% Lp baseline
 cfg.lp.run_alg2=true;
 cfg.lp.run_bs=true;
 cfg.lp.num_starts=1;
+
 cfg.lp.p=0.75;
 cfg.lp.eps0=0.1;
 cfg.lp.eps_min=1e-3;
 cfg.lp.sigma_max=1e6;
 cfg.lp.gamma=0.9;
 cfg.lp.tol_outer=1e-3;
+
 cfg.lp.alpha0=1e-3;
 cfg.lp.theta=1e-4;
 cfg.lp.delta=0.5;
 cfg.lp.reference_eta=0.85;
+
 cfg.lp.tau_x0=1e-3;
 cfg.lp.tau_f0=1e-6;
 cfg.lp.tau_x_min=1e-5;
 cfg.lp.tau_f_min=1e-8;
+
 cfg.lp.sigma_minus=-1;
 cfg.lp.use_curvature_sigma0=true;
+
+%% Balanced-polytope projection
 cfg.lp.proj.tol=1e-8;
 cfg.lp.proj.max_iter=5000;
 cfg.lp.proj.alpha0=[];
@@ -110,25 +142,48 @@ cfg.lp.proj.alpha_min=1e-14;
 cfg.lp.proj.alpha_max=1e14;
 cfg.lp.proj.warm_start=false;
 cfg.lp.proj.verbose=false;
+
+%% Numerical safeguards
 cfg.lp.max_outer=100;
 cfg.lp.max_inner=500;
 cfg.lp.max_backtrack=60;
+
 cfg.lp.alpha_min=1e-20;
 cfg.lp.alpha_max=1e20;
+
 cfg.lp.tau_index_shift=1;
 cfg.lp.kkt_map_tol=1e-8;
 cfg.lp.perturb_rho=0.05;
+
+%% Exact accelerated internal N2-best
 cfg.lp.local_max_swaps=inf;
-cfg.lp.local_block=512;
 cfg.lp.improve_tol=1e-12;
+
+% Rebuild the entire exact gain cache periodically to eliminate
+% floating-point drift; between rebuilds only affected pair blocks
+% are refreshed exactly.
 cfg.lp.local_recompute_every=100;
-cfg.lp.local_verbose_every=100;
 cfg.lp.local_final_verify=true;
+
+% 0 avoids terminal I/O becoming a timing bottleneck.
+cfg.lp.local_verbose_every=0;
+
+% Compatibility field; the fast routine does not use row blocking.
+cfg.lp.local_block=512;
+
 cfg.lp.do_rounding=true;
 cfg.lp.do_internal_local_search=true;
+
 cfg.lp.store_inner_history=false;
 cfg.lp.verbose=true;
+
+% Strictly diagnose failure of projection / line-search / stopping rules.
+cfg.lp.strict_paper_checks=true;
+
+% Extra project-wide postprocessing, separate from the paper's internal N2.
 cfg.lp.use_common_2opt=true;
+
+
 %% Vector baseline
 cfg.vector.eta=0.001;
 cfg.vector.beta=100;

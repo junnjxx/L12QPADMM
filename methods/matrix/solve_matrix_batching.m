@@ -25,6 +25,9 @@ if ~isfield(opts,'n_outer'), opts.n_outer=1; end
 if ~isfield(opts,'use_adaptive_beta'), opts.use_adaptive_beta=false; end
 if ~isfield(opts,'beta_mode'), opts.beta_mode="fixed"; end
 if ~isfield(opts,'partition_support_tol'), opts.partition_support_tol=1e-8; end
+if ~isfield(opts,'search_assignment_enabled'), opts.search_assignment_enabled=false; end
+if ~isfield(opts,'search_round'), opts.search_round=1000; end
+if ~isfield(opts,'search_verbose'), opts.search_verbose=false; end
 if ~isfield(opts,'tau_X'), error('cfg.matrix.tau_X is required for the paper-aligned Matrix solver.'); end
 if ~isscalar(opts.tau_X) || ~isfinite(opts.tau_X) || opts.tau_X<=0, error('cfg.matrix.tau_X must be a positive finite scalar.'); end
 variant=lower(string(opts.variant));
@@ -51,11 +54,8 @@ fprintf('[Matrix tau_X] %.6g\n',opts.tau_X);
 fprintf('============================================================\n');
 A=problem.A;
 G=problem.G;
-normA2 = norm(A,2);
-opts.eta_max = 4 * normA2 * (1 + 1e-6);
-fprintf('[Matrix] ||A||_2 = %.10e | eta_max = %.10e\n', ...
-    normA2, opts.eta_max);
-
+normA2=norm(A,2);
+opts.eta_max=4*normA2*(1+1e-6);
 beta0=opts.beta0;
 c=opts.c;
 [N,B]=size(G);
@@ -105,16 +105,23 @@ actual_iter=0;
 final_error=NaN;
 final_r=NaN;
 final_dxy=NaN;
+search_trace=struct();
+search_trace.total_time=0;
 tsolve=tic;
 for outer_id=1:opts.n_outer
-    [X,Y,error_list,flag,Lambda_history,r_history,dxy_history,round_y_history,fractional_ratio_history,lambda_fnorm,dx_history,beta_history,ori_obj_history,eta_state,eta_updates_outer,eta_update_count_outer,actual_iter,final_error,final_r,final_dxy]=...
+    [X,Y,error_list,flag,Lambda_history,r_history,dxy_history,round_y_history,fractional_ratio_history,lambda_fnorm,dx_history,beta_history,ori_obj_history,eta_state,eta_updates_outer,eta_update_count_outer,actual_iter,final_error,final_r,final_dxy,search_trace]=...
         splitadmm20240119(A,G,eta_state,beta0,c,outer_id,opts.max_iter,X,Y,opts.tol,opts.use_adaptive_beta,opts);
     eta_update_count=eta_update_count+eta_update_count_outer;
     if ~matrix_clean && ~isempty(eta_updates_outer)
         eta_update_history=[eta_update_history,eta_updates_outer]; %#ok<AGROW>
     end
 end
-solve_time=toc(tsolve);
+solve_wall_time=toc(tsolve);
+search_diagnostic_time=0;
+if isfield(search_trace,'total_time') && isfinite(search_trace.total_time)
+    search_diagnostic_time=search_trace.total_time;
+end
+solve_time=max(0,solve_wall_time-search_diagnostic_time);
 % The paper's X block is the sparse/binary block, so extraction uses X.
 textract=tic;
 [I,extraction_status]=assignment_to_batches(X,problem.batch_size,opts.partition_support_tol);
@@ -127,6 +134,8 @@ else
     P=batches_to_assignment(I,problem.num_samples,problem.num_batches,problem.batch_size);
     metrics=evaluate_partition(P,problem,eta_reference);
 end
+search_trace=finalize_search_trace(search_trace,P,X,problem.batch_size);
+print_search_trace_summary(search_trace);
 result=struct();
 result.method="Matrix";
 result.variant="standard";
@@ -134,6 +143,11 @@ result.backend="PURE MATLAB";
 result.paper_aligned=true;
 result.matrix_mex=false;
 result.tau_X=opts.tau_X;
+result.normA2=normA2;
+result.eta_max_theory=opts.eta_max;
+result.search_trace=search_trace;
+result.search_diagnostic_time=search_diagnostic_time;
+result.solve_wall_time_including_search=solve_wall_time;
 result.I=I;
 result.P=P;
 result.X=X;
@@ -203,6 +217,12 @@ if opts.verbose
     fprintf('\n[Matrix 最终结果]\n');
     fprintf('*Matrix backend = %s*\n',char(result.backend));
     fprintf('*Matrix tau_X = %.6g*\n',result.tau_X);
+    fprintf('*Matrix ||A||_2 = %.10e | eta_max = 4||A||_2(1+1e-6) = %.10e*\n',result.normA2,result.eta_max_theory);
+    if result.search_trace.enabled
+        fprintf('*Nearest-assignment search uses partition-invariant P*P'' comparison.*\n');
+        fprintf('*Search total Hungarian time = %.6f s | stable final match = %g*\n',...
+            result.search_trace.total_time,result.search_trace.stable_final_match_iteration);
+    end
     fprintf('*Matrix 迭代数 = %d*\n',result.iterations);
     fprintf('*Matrix 每次迭代平均时间 = %.6e 秒*\n',result.avg_iter_time);
     fprintf('*Matrix 求解总时间 = %.6f 秒*\n',result.solve_time);
@@ -223,5 +243,111 @@ if opts.verbose
         fprintf('Matrix 完整离散目标值（统一参考 eta=%g）= %.10e\n',eta_reference,metrics.matrix_full_objective);
     end
 end
+
 end
-  
+
+function trace=finalize_search_trace(trace,P_final,X_final,b)
+if ~isfield(trace,'enabled')
+    trace=struct('enabled',false,'method',"exact_balanced_hungarian",'round',NaN,...
+        'iterations',zeros(0,1),'assignments',{cell(0,1)},'coassignments',{cell(0,1)},...
+        'distance_fro',zeros(0,1),'inner_product',zeros(0,1),'changed',false(0,1),...
+        'reassigned_from_previous',zeros(0,1),'change_iterations',zeros(0,1),...
+        'change_assignments',{cell(0,1)},'change_coassignments',{cell(0,1)},...
+        'search_time',zeros(0,1),'cumulative_search_time',zeros(0,1),'total_time',0,...
+        'num_searches',0,'num_changes',0,'last_change_iteration',NaN,...
+        'stabilization_iteration',NaN);
+end
+K=numel(trace.iterations);
+P_native=round(X_final);
+native_valid=all(sum(P_native,2)==1) && all(sum(P_native,1)==b) && all(P_native(:)==0 | P_native(:)==1);
+if native_valid, P_final=P_native; end
+trace.matches_final=false(K,1);
+trace.first_final_match_iteration=NaN;
+trace.stable_final_match_iteration=NaN;
+trace.last_search_iteration=NaN;
+trace.last_search_matches_final=false;
+trace.final_assignment=[];
+trace.final_coassignment=[];
+trace.stable_assignment=[];
+trace.stable_coassignment=[];
+trace.final_stable_assignment=[];
+trace.final_stable_coassignment=[];
+if K==0 || isempty(P_final), return; end
+P_final=sparse(P_final~=0);
+C_final=sparse((P_final*P_final')>0);
+trace.final_assignment=P_final;
+trace.final_coassignment=C_final;
+for k=1:K
+    if isfield(trace,'coassignments') && numel(trace.coassignments)>=k && ~isempty(trace.coassignments{k})
+        Ck=sparse(trace.coassignments{k}~=0);
+    else
+        Pk=sparse(trace.assignments{k}~=0);
+        Ck=sparse((Pk*Pk')>0);
+    end
+    trace.matches_final(k)=isequal(Ck,C_final);
+end
+trace.last_search_iteration=trace.iterations(end);
+trace.last_search_matches_final=trace.matches_final(end);
+idx=find(trace.matches_final,1,'first');
+if ~isempty(idx), trace.first_final_match_iteration=trace.iterations(idx); end
+if isfinite(trace.stabilization_iteration)
+    stable_idx0=find(trace.iterations==trace.stabilization_iteration,1,'first');
+    if ~isempty(stable_idx0)
+        trace.stable_assignment=trace.assignments{stable_idx0};
+        if isfield(trace,'coassignments') && numel(trace.coassignments)>=stable_idx0
+            trace.stable_coassignment=trace.coassignments{stable_idx0};
+        else
+            Ps=sparse(trace.stable_assignment~=0);
+            trace.stable_coassignment=sparse((Ps*Ps')>0);
+        end
+    end
+end
+suffix_all=true;
+stable_idx=NaN;
+for k=K:-1:1
+    suffix_all=suffix_all && trace.matches_final(k);
+    if suffix_all, stable_idx=k; end
+end
+if isfinite(stable_idx)
+    trace.stable_final_match_iteration=trace.iterations(stable_idx);
+    trace.final_stable_assignment=trace.assignments{stable_idx};
+    if isfield(trace,'coassignments') && numel(trace.coassignments)>=stable_idx
+        trace.final_stable_coassignment=trace.coassignments{stable_idx};
+    else
+        Pf=sparse(trace.final_stable_assignment~=0);
+        trace.final_stable_coassignment=sparse((Pf*Pf')>0);
+    end
+end
+end
+
+function print_search_trace_summary(trace)
+if ~isfield(trace,'enabled') || ~trace.enabled, return; end
+fprintf('\n============================================================\n');
+fprintf('[Nearest assignment search: partition-invariant P*P'' comparison]\n');
+fprintf('method = %s | search_round = %d | searches = %d | partition changes = %d\n',...
+    char(string(trace.method)),trace.round,trace.num_searches,trace.num_changes);
+fprintf('-----------------------------------------------------------------------------------------------\n');
+fprintf('%8s %10s %14s %9s %11s %12s %14s %14s\n',...
+    'index','iter','dist','changed','reassigned','match_final','search_time','cum_time');
+fprintf('-----------------------------------------------------------------------------------------------\n');
+for k=1:trace.num_searches
+    if isfield(trace,'cumulative_search_time') && numel(trace.cumulative_search_time)>=k
+        cum_t=trace.cumulative_search_time(k);
+    else
+        cum_t=sum(trace.search_time(1:k));
+    end
+    fprintf('%8d %10d %14.6e %9d %11d %12d %14.6e %14.6e\n',...
+        k,trace.iterations(k),trace.distance_fro(k),trace.changed(k),...
+        trace.reassigned_from_previous(k),trace.matches_final(k),...
+        trace.search_time(k),cum_t);
+end
+fprintf('-----------------------------------------------------------------------------------------------\n');
+fprintf('last_change_iteration        = %g\n',trace.last_change_iteration);
+fprintf('stabilization_iteration      = %g\n',trace.stabilization_iteration);
+fprintf('first_final_match_iteration  = %g\n',trace.first_final_match_iteration);
+fprintf('stable_final_match_iteration = %g\n',trace.stable_final_match_iteration);
+fprintf('last_search_matches_final    = %d\n',trace.last_search_matches_final);
+fprintf('Hungarian search total_time  = %.6f s\n',trace.total_time);
+fprintf('NOTE: changed/match_final/stable_final_match are all based on P*P'', so batch-label permutations are ignored.\n');
+fprintf('============================================================\n');
+end

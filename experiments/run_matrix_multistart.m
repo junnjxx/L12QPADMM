@@ -44,6 +44,14 @@ iterations=nan(R,1);
 avg_iter_time=nan(R,1);
 matrix_init_seed=nan(R,1);
 two_opt_seed=nan(R,1);
+search_trace=cell(R,1);
+search_stabilization_iteration=nan(R,1);
+search_first_final_match_iteration=nan(R,1);
+search_stable_final_match_iteration=nan(R,1);
+search_num_changes=nan(R,1);
+search_diagnostic_time=nan(R,1);
+search_total_time=nan(R,1);
+search_matches_final=cell(R,1);
 wall_tic=tic;
 for rr=1:R
     if matrix_init.is_external
@@ -72,6 +80,16 @@ for rr=1:R
     end
     result=solve_matrix_batching(problem,opts);
     raw{rr}=result;
+    search_trace{rr}=result.search_trace;
+    if result.search_trace.enabled
+        search_stabilization_iteration(rr)=result.search_trace.stabilization_iteration;
+        search_first_final_match_iteration(rr)=result.search_trace.first_final_match_iteration;
+        search_stable_final_match_iteration(rr)=result.search_trace.stable_final_match_iteration;
+        search_num_changes(rr)=result.search_trace.num_changes;
+        search_diagnostic_time(rr)=result.search_diagnostic_time;
+        search_total_time(rr)=result.search_trace.total_time;
+        search_matches_final{rr}=result.search_trace.matches_final;
+    end
     solve_time(rr)=result.solve_time;
     extract_time(rr)=result.extract_time;
     iterations(rr)=result.iterations;
@@ -111,6 +129,12 @@ for rr=1:R
         end
         if matrix_init.is_external
             fprintf(' | *含warm-start端到端时间=%.4f 秒*',matrix_init.overhead_time+total_rr);
+        end
+        if result.search_trace.enabled
+            fprintf(' | search: n=%d, changes=%d, stable=%g, final-stable=%g, diag=%.4fs',...
+                result.search_trace.num_searches,result.search_trace.num_changes,...
+                result.search_trace.stabilization_iteration,result.search_trace.stable_final_match_iteration,...
+                result.search_diagnostic_time);
         end
         fprintf('\n');
     end
@@ -155,6 +179,14 @@ exp_result.warmstart_overhead_time=matrix_init.overhead_time;
 exp_result.warmstart_label=string(matrix_init.label);
 exp_result.matrix_init_seed=matrix_init_seed;
 exp_result.two_opt_seed=two_opt_seed;
+exp_result.search_trace=search_trace;
+exp_result.search_stabilization_iteration=search_stabilization_iteration;
+exp_result.search_first_final_match_iteration=search_first_final_match_iteration;
+exp_result.search_stable_final_match_iteration=search_stable_final_match_iteration;
+exp_result.search_num_changes=search_num_changes;
+exp_result.search_diagnostic_time=search_diagnostic_time;
+exp_result.search_total_time=search_total_time;
+exp_result.search_matches_final=search_matches_final;
 exp_result.best_raw_id=best_raw_id;
 exp_result.best_refined_id=best_refined_id;
 exp_result.wall_time=wall_time;

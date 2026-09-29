@@ -1,4 +1,4 @@
-function [X,Y,error_list,flag,Lambda_history,r_collect,dxy_collect,round_y_collect,y_non_ratio,lambda_fnorm,dx_history,beta_history,ori_obj_part_list,eta_state_final,eta_update_history,eta_update_count,actual_iter,final_error,final_r,final_dxy] = splitadmm20240119(A,G,eta_state,beta0,c,outer_id,maxiter,X,Y,epsi,use_adaptive_beta,opts)
+function [X,Y,error_list,flag,Lambda_history,r_collect,dxy_collect,round_y_collect,y_non_ratio,lambda_fnorm,dx_history,beta_history,ori_obj_part_list,eta_state_final,eta_update_history,eta_update_count,actual_iter,final_error,final_r,final_dxy,search_trace] = splitadmm20240119(A,G,eta_state,beta0,c,outer_id,maxiter,X,Y,epsi,use_adaptive_beta,opts)
 %SPLITADMM20240119 Paper-aligned pure MATLAB Matrix ADMM backend.
 % Paper notation is used internally:
 %   X: box/L1/2 block, 0<=X<=1.
@@ -29,9 +29,17 @@ if ~isfield(opts,'eta_max'), opts.eta_max=opts.eta; end
 if ~isfield(opts,'beta_mode'), opts.beta_mode="fixed"; end
 if ~isfield(opts,'kabeta'), opts.kabeta=1; end
 if ~isfield(opts,'beta_switch_iter'), opts.beta_switch_iter=1000; end
+if ~isfield(opts,'search_assignment_enabled'), opts.search_assignment_enabled=false; end
+if ~isfield(opts,'search_round'), opts.search_round=1000; end
+if ~isfield(opts,'search_verbose'), opts.search_verbose=false; end
 if ~isfield(opts,'tau_X'), error('Paper-aligned Matrix ADMM requires opts.tau_X.'); end
 tau_X=double(opts.tau_X);
 if ~isscalar(tau_X) || ~isfinite(tau_X) || tau_X<=0, error('opts.tau_X must be a positive finite scalar.'); end
+search_enabled=logical(opts.search_assignment_enabled);
+search_round=double(opts.search_round);
+if search_enabled && (~isscalar(search_round) || ~isfinite(search_round) || search_round<1 || search_round~=round(search_round))
+    error('opts.search_round must be a positive integer.');
+end
 matrix_clean=logical(opts.matrix_clean);
 matrix_clean_fast=logical(opts.matrix_clean_fast);
 matrix_detail=logical(opts.matrix_detail);
@@ -41,7 +49,7 @@ if ~isequal(size(A),[N,N]), error('A must be N-by-N where G is N-by-B.'); end
 if ~isequal(size(X),[N,B]) || ~isequal(size(Y),[N,B]), error('Initial X and Y must both be N-by-B.'); end
 inv_c=1/c;
 inv_N=1/N;
-inv_B=1/B; 
+inv_B=1/B;
 cprime=c+tau_X;
 target_batch_size=N/B;
 target_batch_size_round=round(target_batch_size);
@@ -64,6 +72,9 @@ actual_iter=0;
 final_error=NaN;
 final_r=NaN;
 final_dxy=NaN;
+search_trace=init_search_trace(search_enabled,search_round);
+previous_search_assignment=[];
+previous_search_coassignment=[];
 eta_update_history=struct('outer_id',{},'iteration',{},'nnzY',{},'dxy',{},'eta_state_old',{},'eta_state_new',{},'eta_effective_old',{},'eta_effective_new',{});
 eta_update_count=0;
 current_nnz=nnz(X);
@@ -73,6 +84,9 @@ eta_no_improvement=0;
 [eta_effective,prox_threshold,prox_acos_coeff]=make_eta_cache(eta_state,cprime);
 if opts.verbose
     fprintf('[splitadmm20240119] paper-aligned blocks | tau_X=%.6g | cprime=%.6g\n',tau_X,cprime);
+    if search_enabled
+        fprintf('[assignment search] exact balanced Hungarian every %d iterations\n',search_round);
+    end
 end
 for iter=1:maxiter
     actual_iter=iter;
@@ -161,6 +175,43 @@ for iter=1:maxiter
         final_r=r;
         final_dxy=dxy;
     end
+    % Diagnostic only: exact nearest balanced binary assignment to current X^k.
+    % Partition identity is label-invariant and represented by P*P'.
+    % Hence changed=1 iff the co-assignment matrix P*P' changes.
+    % Hungarian timing is recorded separately and excluded from ADMM solve time.
+    if search_enabled && mod(iter,search_round)==0
+        t_search=tic;
+        [P_search,search_distance,search_score]=nearest_balanced_assignment(X,target_batch_size_round);
+        search_elapsed=toc(t_search);
+        P_search_sparse=sparse(P_search);
+        C_search=sparse((P_search_sparse*P_search_sparse')>0);
+        changed=false;
+        reassigned=0;
+        if ~isempty(previous_search_coassignment)
+            changed=~isequal(C_search,previous_search_coassignment);
+            reassigned=partition_reassigned_count(previous_search_assignment,P_search);
+        end
+        search_trace.iterations(end+1,1)=iter; %#ok<AGROW>
+        search_trace.assignments{end+1,1}=P_search_sparse; %#ok<AGROW>
+        search_trace.coassignments{end+1,1}=C_search; %#ok<AGROW>
+        search_trace.distance_fro(end+1,1)=search_distance; %#ok<AGROW>
+        search_trace.inner_product(end+1,1)=search_score; %#ok<AGROW>
+        search_trace.changed(end+1,1)=changed; %#ok<AGROW>
+        search_trace.reassigned_from_previous(end+1,1)=reassigned; %#ok<AGROW>
+        search_trace.search_time(end+1,1)=search_elapsed; %#ok<AGROW>
+        search_trace.total_time=search_trace.total_time+search_elapsed;
+        search_trace.cumulative_search_time(end+1,1)=search_trace.total_time; %#ok<AGROW>
+        if changed
+            search_trace.change_iterations(end+1,1)=iter; %#ok<AGROW>
+        end
+        previous_search_assignment=P_search;
+        previous_search_coassignment=C_search;
+        if opts.search_verbose
+            fprintf(['[assignment search] iter=%d | dist=%.6e | changed=%d | ',...
+                'reassigned=%d | search_time=%.6e s | total_time=%.6e s\n'],...
+                iter,search_distance,changed,reassigned,search_elapsed,search_trace.total_time);
+        end
+    end
     if ~matrix_clean
         if need_residual
             error_list(end+1,1)=stopping_error; %#ok<AGROW>
@@ -236,7 +287,136 @@ elseif ~isfinite(final_dxy)
     final_dxy=norm(Y-X,'fro');
     final_error=final_dxy;
 end
+search_trace.num_searches=numel(search_trace.iterations);
+search_trace.num_changes=numel(search_trace.change_iterations);
+search_trace.change_assignments=search_trace.assignments(search_trace.changed);
+search_trace.change_coassignments=search_trace.coassignments(search_trace.changed);
+if search_trace.num_searches==0
+    search_trace.stabilization_iteration=NaN;
+    search_trace.last_change_iteration=NaN;
+elseif search_trace.num_changes==0
+    search_trace.stabilization_iteration=search_trace.iterations(1);
+    search_trace.last_change_iteration=NaN;
+else
+    search_trace.last_change_iteration=search_trace.change_iterations(end);
+    search_trace.stabilization_iteration=search_trace.last_change_iteration;
+end
 eta_state_final=eta_state;
+end
+
+function trace=init_search_trace(enabled,round_value)
+trace=struct();
+trace.enabled=logical(enabled);
+trace.method="exact_balanced_hungarian";
+trace.round=round_value;
+trace.iterations=zeros(0,1);
+trace.assignments=cell(0,1);
+trace.coassignments=cell(0,1);
+trace.distance_fro=zeros(0,1);
+trace.inner_product=zeros(0,1);
+trace.changed=false(0,1);
+trace.reassigned_from_previous=zeros(0,1);
+trace.change_iterations=zeros(0,1);
+trace.change_assignments=cell(0,1);
+trace.change_coassignments=cell(0,1);
+trace.search_time=zeros(0,1);
+trace.cumulative_search_time=zeros(0,1);
+trace.total_time=0;
+trace.num_searches=0;
+trace.num_changes=0;
+trace.last_change_iteration=NaN;
+trace.stabilization_iteration=NaN;
+end
+
+function [P,distance_fro,score]=nearest_balanced_assignment(X,b)
+% Exact projection of X onto the balanced binary assignment set in
+% Frobenius distance. For binary feasible P, ||P||_F^2=N is constant, so
+% minimizing ||P-X||_F^2 is equivalent to maximizing <X,P>.
+[N,B]=size(X);
+if B*b~=N, error('Balanced nearest-assignment search requires N=B*b.'); end
+slot_label=repelem(1:B,b);
+cost=-X(:,slot_label);
+slot_assignment=hungarian_min_cost(cost);
+group_assignment=slot_label(slot_assignment);
+P=false(N,B);
+P(sub2ind([N,B],(1:N)',group_assignment(:)))=true;
+P=double(P);
+distance_fro=norm(P-X,'fro');
+score=sum(sum(P.*X));
+end
+
+function reassigned=partition_reassigned_count(P_prev,P_curr)
+% Label-invariant reassigned count after optimal relabeling of batch columns.
+% A pure column permutation of the same partition therefore gives zero.
+P_prev=double(P_prev~=0);
+P_curr=double(P_curr~=0);
+[N,B]=size(P_prev);
+if ~isequal(size(P_curr),[N,B]), error('Partition sizes must match.'); end
+overlap=P_prev'*P_curr;
+col_map=hungarian_min_cost(-overlap);
+matched=0;
+for b=1:B
+    matched=matched+overlap(b,col_map(b));
+end
+reassigned=N-matched;
+end
+
+function assignment=hungarian_min_cost(cost)
+% Deterministic O(n^3) Hungarian algorithm for a square finite cost matrix.
+cost=double(cost);
+[n,m]=size(cost);
+if n~=m, error('hungarian_min_cost requires a square matrix.'); end
+if any(~isfinite(cost(:))), error('Hungarian cost matrix must be finite.'); end
+u=zeros(n,1);
+v=zeros(m+1,1);
+p=zeros(m+1,1);
+way=zeros(m+1,1);
+for i=1:n
+    p(1)=i;
+    j0=1;
+    minv=inf(m+1,1);
+    used=false(m+1,1);
+    while true
+        used(j0)=true;
+        i0=p(j0);
+        delta=inf;
+        j1=0;
+        for j=2:m+1
+            if ~used(j)
+                cur=cost(i0,j-1)-u(i0)-v(j);
+                if cur<minv(j)
+                    minv(j)=cur;
+                    way(j)=j0;
+                end
+                if minv(j)<delta
+                    delta=minv(j);
+                    j1=j;
+                end
+            end
+        end
+        for j=1:m+1
+            if used(j)
+                if p(j)~=0, u(p(j))=u(p(j))+delta; end
+                v(j)=v(j)-delta;
+            elseif j>1
+                minv(j)=minv(j)-delta;
+            end
+        end
+        j0=j1;
+        if p(j0)==0, break; end
+    end
+    while true
+        j1=way(j0);
+        p(j0)=p(j1);
+        j0=j1;
+        if j0==1, break; end
+    end
+end
+assignment=zeros(n,1);
+for j=2:m+1
+    if p(j)~=0, assignment(p(j))=j-1; end
+end
+if any(assignment==0), error('Hungarian assignment failed to produce a perfect matching.'); end
 end
 
 function eta_new=next_eta_state(eta_old,eta_stage_initial,eta_positive_start,eta_growth,eta_max)

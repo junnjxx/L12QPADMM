@@ -232,6 +232,7 @@ function opts = lp_options_from_config(c)
     opts.proj = c.proj;
     opts.verbose = c.verbose;
     opts.store_inner_history = c.store_inner_history;
+    opts.strict_paper_checks = c.strict_paper_checks;
 end
 
 function nu = lp_quadratic_curvature_lower(A)
