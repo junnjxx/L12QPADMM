@@ -4,10 +4,10 @@ function cfg = config()
 % restricted to cfg.methods.run.
 cfg=struct();
 %% Methods to run
-cfg.methods.run=["Lp"];
+cfg.methods.run=["Lp","Vector"];
 %% Problem instance
 cfg.data.profile="custom";
-cfg.data.group_sizes=[48,47,46,44,43,56,54,57,50,55]; % 4:[20,25,33,22] 10:[48,47,46,44,43,56,54,57,50,55]
+cfg.data.group_sizes=[96,94,97,88,86,107,108,114,100,110]; % 4:[20,25,33,22] 10:[48,47,46,44,43,56,54,57,50,55]
 cfg.data.dim_x=100;
 cfg.data.mnist_dir="";
 cfg.data.mnist_per_digit=100;
@@ -26,7 +26,7 @@ cfg.matrix.eta=0.01;
 % Use this as the experiment parameter and change it explicitly if needed.
 cfg.matrix.tau_X=0.00001;
 cfg.matrix.max_iter=2000000;
-cfg.matrix.tol=1e-5;
+cfg.matrix.tol=1e-6;
 %% eta continuation
 % -1 -> -0.5 -> 0 -> 0.01 -> 0.011 -> ... -> eta_max
 cfg.matrix.eta_adapt_enabled=true;
@@ -59,9 +59,9 @@ cfg.matrix.early_exist_interval=10;
 cfg.matrix.init_mode="uniform";
 cfg.matrix.lp_init_variant="alg2";
 %% clean mode
-cfg.matrix.matrix_clean=false;
-cfg.matrix.matrix_detail=true;
-cfg.matrix.matrix_clean_fast=false;
+cfg.matrix.matrix_clean=true;
+cfg.matrix.matrix_detail=false;
+cfg.matrix.matrix_clean_fast=true;
 %% MEX solver
 % IMPORTANT: the current MEX kernel is legacy and does not implement the
 % paper-aligned X-first update with tau_X. Keep false until C++ is updated.
@@ -134,14 +134,26 @@ cfg.lp.tau_f_min=1e-8;
 cfg.lp.sigma_minus=-1;
 cfg.lp.use_curvature_sigma0=true;
 
+
 %% Balanced-polytope projection
-cfg.lp.proj.tol=1e-8;
-cfg.lp.proj.max_iter=5000;
-cfg.lp.proj.alpha0=[];
-cfg.lp.proj.alpha_min=1e-14;
-cfg.lp.proj.alpha_max=1e14;
-cfg.lp.proj.warm_start=false;
-cfg.lp.proj.verbose=false;
+% For the rectangular balanced-assignment adaptation, all Euclidean
+% projections are solved accurately by MOSEK.
+%
+% Projection:
+%   min_X 0.5*||X-C||_F^2
+%   s.t.  X*1_m = 1_n,
+%         X'*1_n = capacities,
+%         X >= 0.
+
+cfg.lp.proj.tol = 1e-6;
+
+cfg.lp.proj.mosek_toolbox_path = ...
+    "/home/ubuntu/xlj/mosek/11.2/toolbox/r2019bom";
+
+cfg.lp.proj.mosek_license_file = ...
+    "/home/ubuntu/xlj/mosek/mosek.lic";
+
+cfg.lp.proj.mosek_verbose = true;
 
 %% Numerical safeguards
 cfg.lp.max_outer=100;

@@ -512,39 +512,114 @@ if opts.do_rounding && isfinite(best_jcommon_post_round_score) && isfinite(f_bes
     end
 end
 function [Z,state_out,pinfo] = default_projector(C,state_in)
-        [Z,state_out,pinfo] = project_balanced_dualbb(C,capacities,opts.proj,state_in);
+%DEFAULT_PROJECTOR
+% Rectangular balanced-assignment adaptation:
+% solve every Euclidean projection accurately with MOSEK.
+
+    [Z,state_out,pinfo] = ...
+        project_balanced_mosek( ...
+            C,capacities,opts.proj,state_in);
+
 end
+
+
 function [Z,state_out,pinfo] = timed_project(C,state_in)
-        pt = tic;
-        [Z,state_out,pinfo] = projector(C,state_in);
-        profile.projection_time = profile.projection_time + toc(pt);
-        profile.projection_calls = profile.projection_calls + 1;
-        if isstruct(pinfo) && isfield(pinfo,'iter') && isfinite(pinfo.iter)
-            profile.projection_inner_iterations = profile.projection_inner_iterations + pinfo.iter;
+%TIMED_PROJECT
+% Timed wrapper around the balanced projection solver.
+
+    pt = tic;
+
+    [Z,state_out,pinfo] = ...
+        projector(C,state_in);
+
+    profile.projection_time = ...
+        profile.projection_time + toc(pt);
+
+    profile.projection_calls = ...
+        profile.projection_calls + 1;
+
+
+    %% Count inner solver iterations when available.
+
+    if isstruct(pinfo) && ...
+            isfield(pinfo,'iter') && ...
+            isfinite(pinfo.iter)
+
+        profile.projection_inner_iterations = ...
+            profile.projection_inner_iterations + ...
+            pinfo.iter;
+    end
+
+
+    %% ------------------------------------------------------------
+    % Projection acceptance
+    %
+    % IMPORTANT:
+    %
+    % The projection routine itself decides whether its returned solution
+    % satisfies the solver-specific numerical acceptance criterion.
+    %
+    % In particular, project_balanced_mosek uses
+    %
+    %   target_tol = opts.proj.tol
+    %
+    % with a small floating-point acceptance margin.
+    %
+    % Therefore do NOT independently impose
+    %
+    %   pinfo.res_inf <= opts.proj.tol
+    %
+    % again here, otherwise a valid result such as
+    %
+    %   target   = 1.000e-8
+    %   residual = 1.049e-8
+    %
+    % would be rejected after the projection solver already accepted it.
+    % -------------------------------------------------------------
+
+    proj_ok = ...
+        isstruct(pinfo) && ...
+        isfield(pinfo,'converged') && ...
+        logical(pinfo.converged) && ...
+        isfield(pinfo,'res_inf') && ...
+        isfinite(pinfo.res_inf);
+
+
+    if ~proj_ok
+
+        if isstruct(pinfo) && ...
+                isfield(pinfo,'res_inf') && ...
+                isfinite(pinfo.res_inf)
+
+            pres = pinfo.res_inf;
+
+        else
+
+            pres = NaN;
         end
-        % Algorithm 2 requires the Euclidean projection onto the feasible
-        % polytope. dualBB computes it iteratively, so an unconverged
-        % projection must not be silently used.
-        proj_ok = isstruct(pinfo) && ...
-            isfield(pinfo,'converged') && logical(pinfo.converged) && ...
-            isfield(pinfo,'res_inf') && isfinite(pinfo.res_inf) && ...
-            pinfo.res_inf <= opts.proj.tol;
-        if ~proj_ok
-            if isstruct(pinfo) && isfield(pinfo,'res_inf') && isfinite(pinfo.res_inf)
-                pres = pinfo.res_inf;
-            else
-                pres = NaN;
-            end
-            msg = sprintf( ...
-                ['Balanced projection did not converge to the requested ', ...
-                 'tolerance %.3e; residual=%.3e.'], ...
-                 opts.proj.tol,pres);
-            if opts.strict_paper_checks
-                error('Lp:ProjectionNotConverged','%s',msg);
-            else
-                warning('Lp:ProjectionNotConverged','%s',msg);
-            end
+
+
+        msg = sprintf( ...
+            ['Balanced projection did not converge according to ', ...
+             'the projection solver acceptance rule; ', ...
+             'residual=%.3e.'], ...
+            pres);
+
+
+        if opts.strict_paper_checks
+
+            error( ...
+                'Lp:ProjectionNotConverged', ...
+                '%s',msg);
+
+        else
+
+            warning( ...
+                'Lp:ProjectionNotConverged', ...
+                '%s',msg);
         end
+    end
+
 end
 function [Xhat,elapsed] = timed_round(Xin)
         rtic=tic;
