@@ -17,14 +17,8 @@ function result = run_vector_baseline(problem,cfg)
         % Original algorithm: P = previously selected, Q = remaining.
         tbuild=tic;
         P=setdiff((1:n)',Q,'stable');
-        phi1=phi(Q,Q);
-        phi2=sum(phi(Q,Q),1)'*((np+bs)/n);
-        if np>0
-            phi3=sum(phi(Q,P),2)*((nq-bs)/n);
-        else
-            phi3=zeros(nq,1);
-        end
-        Z=phi1; Z(1:nq+1:end)=diag(Z)-phi2+phi3;
+
+        [Z,~]=build_mmd_batch_Z(  phi,Q,P,bs,n);
         X=bs/nq*ones(nq,1)+(rand(nq,1)-0.5)/nq*0.1;
         Y=bs/nq*ones(nq,1)+(rand(nq,1)-0.5)/nq*0.1;
         % Original splitadmm20240307 has no iteration output and prints every

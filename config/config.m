@@ -1,25 +1,26 @@
 function cfg = config()
 %CONFIG Single user-facing configuration file for the whole experiment.
-% Canonical execution order: eADMM -> Lp -> Random -> Vector -> Matrix,
+% Canonical execution order:
+% eADMM -> Lp -> MMDLP -> Random -> Vector -> Matrix,
 % restricted to cfg.methods.run.
 cfg=struct();
 %% Methods to run
-cfg.methods.run=["Lp","Vector"];
+cfg.methods.run=["MMDLP"];
 %% Problem instance
 cfg.data.profile="custom";
-cfg.data.group_sizes=[96,94,97,88,86,107,108,114,100,110]; % 4:[20,25,33,22] 10:[48,47,46,44,43,56,54,57,50,55]
-cfg.data.dim_x=100;
+cfg.data.group_sizes=[20,25,33,22]; % 4:[20,25,33,22] 10:[48,47,46,44,43,56,54,57,50,55] 10:[96,94,97,88,86,107,108,114,100,110]
+cfg.data.dim_x=10;
 cfg.data.mnist_dir="";
-cfg.data.mnist_per_digit=100;
+cfg.data.mnist_per_digit=10;
 cfg.data.mnist_normalize=true;
 cfg.data.sparsity_density=4e-3;
 cfg.data.linear_relative_noise=1e-1;
-cfg.batch.size=10;
+cfg.batch.size=4;
 cfg.batch.allow_truncation=false;
 %% Matrix solver
 cfg.matrix.c=10;
 cfg.matrix.beta0=10;
-cfg.matrix.eta=0.01;
+cfg.matrix.eta=0.001;
 % Paper-aligned proximal coefficient:
 %   tau_X/2 * ||X-X_prev||_F^2
 % The current paper requires tau_X>0 but does not state one unique numerical value.
@@ -31,8 +32,8 @@ cfg.matrix.tol=1e-6;
 % -1 -> -0.5 -> 0 -> 0.01 -> 0.011 -> ... -> eta_max
 cfg.matrix.eta_adapt_enabled=true;
 cfg.matrix.eta_stage_initial=-10;
-cfg.matrix.eta_stagnation_iters=1000;
-cfg.matrix.eta_growth_factor=1.1;
+cfg.matrix.eta_stagnation_iters=200;
+cfg.matrix.eta_growth_factor=2;
 % eta_max is computed at runtime from the current problem matrix:
 %   eta_max = 4*||A||_2*(1+1e-6),
 % so that eta_max is strictly above the paper threshold 4||A||_2.
@@ -43,7 +44,7 @@ cfg.matrix.eta_max=[];
 % where F1 is the balanced binary assignment set.
 % The exact balanced assignment is obtained by a Hungarian solve after
 % expanding each batch label into batch_size identical slots.
-cfg.matrix.search_assignment_enabled=true;
+cfg.matrix.search_assignment_enabled=false;
 cfg.matrix.search_round=1000;
 % true: print each search online, including per-search and cumulative Hungarian time.
 % Final matches_final / stabilization summary is printed after the final assignment is known.
@@ -59,9 +60,9 @@ cfg.matrix.early_exist_interval=10;
 cfg.matrix.init_mode="uniform";
 cfg.matrix.lp_init_variant="alg2";
 %% clean mode
-cfg.matrix.matrix_clean=true;
-cfg.matrix.matrix_detail=false;
-cfg.matrix.matrix_clean_fast=true;
+cfg.matrix.matrix_clean=false;
+cfg.matrix.matrix_detail=true;
+cfg.matrix.matrix_clean_fast=false;
 %% MEX solver
 % IMPORTANT: the current MEX kernel is legacy and does not implement the
 % paper-aligned X-first update with tau_X. Keep false until C++ is updated.
@@ -153,7 +154,7 @@ cfg.lp.proj.mosek_toolbox_path = ...
 cfg.lp.proj.mosek_license_file = ...
     "/home/ubuntu/xlj/mosek/mosek.lic";
 
-cfg.lp.proj.mosek_verbose = true;
+cfg.lp.proj.mosek_verbose = false;
 
 %% Numerical safeguards
 cfg.lp.max_outer=100;
@@ -196,6 +197,46 @@ cfg.lp.strict_paper_checks=true;
 cfg.lp.use_common_2opt=true;
 
 
+%% MMD-LP baseline
+% Banerjee & Chakraborty, AAAI 2021.
+%
+% At each sequential mini-batch step:
+%
+%   IQP m'Zm
+%       ->
+%   sign-dependent lifted ILP
+%       ->
+%   continuous LP relaxation
+%       ->
+%   top-k rounding.
+%
+% The present implementation uses problem.Phi so that MMD-LP and Vector
+% solve exactly the same sequential MMD batch-selection problem.
+%
+% The AAAI paper reports a Gaussian kernel with parameter/spread 1 in its
+% experiments, but the paper text does not state a sufficiently precise
+% kernel formula to replace the project's shared Phi without an additional
+% source/code check.
+
+cfg.mmdlp.verbose=true;
+
+cfg.mmdlp.linprog_display='none';
+
+cfg.mmdlp.feasibility_tol=1e-7;
+
+cfg.mmdlp.store_relaxed_history=false;
+
+% Extra project-wide postprocessing.
+% This is NOT part of the original AAAI algorithm.
+cfg.mmdlp.use_common_2opt=true;
+%% MMD-LP exact diagnostic
+
+cfg.mmdlp.exact_audit = true;
+
+% Exhaustively solve the IQP only when nQ is small.
+cfg.mmdlp.exact_audit_max_q = 16;
+
+
 %% Vector baseline
 cfg.vector.eta=0.001;
 cfg.vector.beta=100;
@@ -232,7 +273,7 @@ cfg.reporting.print_each_matrix_start=true;
 cfg.reporting.print_random_every=20;
 cfg.reporting.print_first_random=5;
 %% Output
-cfg.output.save_results=true;
+cfg.output.save_results=false;
 %% Seeds
 cfg.seed.data=13;
 cfg.seed.matrix_init_base=1001;

@@ -9,7 +9,7 @@ function cfg = finalize_config(cfg, project_root)
         error('config.m must define cfg.methods.run.');
     end
 
-    canonical_methods = ["eadmm","lp","random","vector","matrix"];
+    canonical_methods =  ["eadmm","lp","mmdlp","random","vector","matrix"];
     selected = lower(strtrim(string(cfg.methods.run)));
     selected = selected(:)';
     selected = selected(selected ~= "");
@@ -20,15 +20,17 @@ function cfg = finalize_config(cfg, project_root)
 
     unknown = selected(~ismember(selected,canonical_methods));
     if ~isempty(unknown)
-        error('Unknown method(s) in cfg.methods.run: %s. Valid names are: eadmm, lp, random, vector, matrix.', ...
-            strjoin(cellstr(unique(unknown,'stable')),', '));
+       error(['Unknown method(s) in cfg.methods.run: %s. ', ...
+       'Valid names are: eadmm, lp, mmdlp, random, vector, matrix.'], ...
+    strjoin(cellstr(unique(unknown,'stable')),', '));
     end
 
     % Remove duplicates and force the requested canonical execution order.
-    cfg.methods.run = canonical_methods(ismember(canonical_methods,selected));
+    cfg.methods.run = unique(selected,'stable');
     cfg.methods.enabled = struct();
     cfg.methods.enabled.eadmm = any(cfg.methods.run == "eadmm");
     cfg.methods.enabled.lp = any(cfg.methods.run == "lp");
+    cfg.methods.enabled.mmdlp = any(cfg.methods.run == "mmdlp");
     cfg.methods.enabled.random = any(cfg.methods.run == "random");
     cfg.methods.enabled.matrix = any(cfg.methods.run == "matrix");
     cfg.methods.enabled.vector = any(cfg.methods.run == "vector");
@@ -213,6 +215,49 @@ function cfg = finalize_config(cfg, project_root)
         if ~islogical(cfg.lp.use_curvature_sigma0) || ~isscalar(cfg.lp.use_curvature_sigma0)
             error('cfg.lp.use_curvature_sigma0 must be a logical scalar.');
         end
+    end
+
+    %% ======================== MMD-LP settings ===============================
+
+    if cfg.methods.enabled.mmdlp
+
+        if exist('linprog','file') == 0
+            error(['MMD-LP requires MATLAB linprog ', ...
+                '(Optimization Toolbox).']);
+        end
+
+        if ~islogical(cfg.mmdlp.verbose) || ...
+                ~isscalar(cfg.mmdlp.verbose)
+            error('cfg.mmdlp.verbose must be a logical scalar.');
+        end
+
+        if ~islogical(cfg.mmdlp.store_relaxed_history) || ...
+                ~isscalar(cfg.mmdlp.store_relaxed_history)
+            error(['cfg.mmdlp.store_relaxed_history ', ...
+                'must be a logical scalar.']);
+        end
+
+        if ~islogical(cfg.mmdlp.use_common_2opt) || ...
+                ~isscalar(cfg.mmdlp.use_common_2opt)
+            error(['cfg.mmdlp.use_common_2opt ', ...
+                'must be a logical scalar.']);
+        end
+
+        if ~isscalar(cfg.mmdlp.feasibility_tol) || ...
+                ~isfinite(cfg.mmdlp.feasibility_tol) || ...
+                cfg.mmdlp.feasibility_tol <= 0
+            error(['cfg.mmdlp.feasibility_tol ', ...
+                'must be a positive finite scalar.']);
+        end
+
+        valid_lp_displays = ["none","iter","final"];
+
+        if ~any(string(cfg.mmdlp.linprog_display) == ...
+                valid_lp_displays)
+            error(['cfg.mmdlp.linprog_display must be ', ...
+                '''none'', ''iter'', or ''final''.']);
+        end
+
     end
 
     %% ======================== eADMM settings ================================
