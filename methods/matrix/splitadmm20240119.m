@@ -241,12 +241,10 @@ for iter=1:maxiter
     end
     if early_hit
         flag=2;
-        AY=AY_new;
         break;
     end
     if stop_due && stopping_error<epsi
         flag=1;
-        AY=AY_new;
         break;
     end
     if opts.eta_adapt_enabled && eta_state<opts.eta_max

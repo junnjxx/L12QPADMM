@@ -313,20 +313,36 @@ function result = solve_eadmm_batching(problem, opts)
 
     %% ======================== DNN rounding / upper bounds ==================
     fprintf('\n[eADMM 第4阶段/4] 对基础 DNN 解做 rounding，生成可行离散划分。\n');
-    fprintf('rounding 使用基础 DNN 解 X_dnn（不是 X_met）；每次 restart 生成一个平衡离散划分，并直接计算 J_common。rounding次数=%d。\n',opts.rounding_restarts);
+    fprintf(['rounding 使用基础 DNN 解 X_dnn（不是 X_met）；', ...
+        '每次 restart 生成一个平衡离散划分，并直接计算 J_common。', ...
+        'rounding次数=%d。\n'],opts.rounding_restarts);
+
     if opts.use_2opt
-        fprintf('每个 rounding 解之后再使用相同的 J_common pair-swap 2-opt；该时间计入 +2opt 方法总时间。\n');
+        fprintf(['先从全部 rounding restart 中选择 raw J_common 最好的解，', ...
+            '然后仅对该 raw 最优解做一次统一 common 2-opt。\n']);
     else
         fprintf('eADMM rounding 后的统一 J_common 2-opt 已关闭。\n');
     end
-    % Paper protocol: upper-bound heuristics use the DNN solution X_dnn.
+
+    % -------------------------------------------------------------------------
+    % Paper protocol:
+    % upper-bound heuristic uses the base DNN solution X_dnn.
+    % -------------------------------------------------------------------------
+
     R = opts.rounding_restarts;
+
     vc_jcommon = nan(R,1);
+
+    % Keep these fields for backward compatibility.
+    % Under the new protocol only ONE raw-best solution is postprocessed.
     vc2_jcommon = nan(R,1);
+
     vc_best_jcommon_history = nan(R,1);
     vc2_best_jcommon_history = nan(R,1);
+
     cumulative_vc_time = nan(R,1);
-    cumulative_2opt_time = nan(R,1);
+    cumulative_2opt_time = zeros(R,1);
+
     rounding_seed = nan(R,1);
     two_opt_seed = nan(R,1);
 
@@ -334,84 +350,260 @@ function result = solve_eadmm_batching(problem, opts)
     best_vc_restart = NaN;
     best_vc_I = [];
     best_vc_metrics = struct();
-    best_vc2_jcommon = inf;
+
+    best_vc2_jcommon = NaN;
     best_vc2_restart = NaN;
     best_vc2_I = [];
     best_vc2_metrics = struct();
 
     vc_time_total = 0;
     two_opt_time_total = 0;
+
     checkpoint_records = struct([]);
     cp_id = 0;
 
+    %% ========================================================================
+    % Step 1: run ALL Vc rounding restarts
+    %         NO 2-opt is performed inside this loop
+    % ========================================================================
+
     for rr = 1:R
-        rounding_seed_rr = opts.rounding_seed_base + rr - 1;
+
+        rounding_seed_rr = ...
+            opts.rounding_seed_base + rr - 1;
+
         rounding_seed(rr) = rounding_seed_rr;
 
+        % ---------------------------------------------------------------------
+        % Vc rounding
+        % ---------------------------------------------------------------------
+
         tvc = tic;
-        [~,~,~,part_cell] = kequi_rounding(rounding_seed_rr,X_dnn,double(B),C_sdp);
-        vc_time_total = vc_time_total + toc(tvc);
 
-        I_rr = part_cell_to_I(part_cell,bs,B,N);
-        P_rr = batches_to_assignment(I_rr,N,B,bs);
-        metrics_rr = evaluate_partition(P_rr,problem,opts.eval_eta);
-        vc_jcommon(rr) = metrics_rr.common_objective;
+        [~,~,~,part_cell] = ...
+            kequi_rounding( ...
+                rounding_seed_rr, ...
+                X_dnn, ...
+                double(B), ...
+                C_sdp);
+
+        vc_time_total = ...
+            vc_time_total + toc(tvc);
+
+        % ---------------------------------------------------------------------
+        % Convert to project partition representation
+        % ---------------------------------------------------------------------
+
+        I_rr = ...
+            part_cell_to_I( ...
+                part_cell, ...
+                bs, ...
+                B, ...
+                N);
+
+        P_rr = ...
+            batches_to_assignment( ...
+                I_rr, ...
+                N, ...
+                B, ...
+                bs);
+
+        metrics_rr = ...
+            evaluate_partition( ...
+                P_rr, ...
+                problem, ...
+                opts.eval_eta);
+
+        vc_jcommon(rr) = ...
+            metrics_rr.common_objective;
+
+        % ---------------------------------------------------------------------
+        % Select the best RAW rounding solution
+        % ---------------------------------------------------------------------
+
         if vc_jcommon(rr) < best_vc_jcommon
-            best_vc_jcommon = vc_jcommon(rr);
-            best_vc_restart = rr;
-            best_vc_I = I_rr;
-            best_vc_metrics = metrics_rr;
-        end
-        vc_best_jcommon_history(rr) = best_vc_jcommon;
 
-        if opts.use_2opt
-            two_opt_seed_rr = opts.two_opt_seed_base + rr - 1;
-            two_opt_seed(rr) = two_opt_seed_rr;
-            opt2.seed = two_opt_seed_rr;
-            opt2.cost_tol = opts.two_opt_tol;
-            opt2.verbose = opts.verbose_2opt;
-            opt2.eta = opts.eval_eta;
-            r2 = apply_common_two_opt(I_rr,problem,opt2);
-            two_opt_time_total = two_opt_time_total + r2.time;
-            vc2_jcommon(rr) = r2.metrics_after.common_objective;
-            if vc2_jcommon(rr) < best_vc2_jcommon
-                best_vc2_jcommon = vc2_jcommon(rr);
-                best_vc2_restart = rr;
-                best_vc2_I = r2.I_after;
-                best_vc2_metrics = r2.metrics_after;
-            end
-            vc2_best_jcommon_history(rr) = best_vc2_jcommon;
+            best_vc_jcommon = ...
+                vc_jcommon(rr);
+
+            best_vc_restart = ...
+                rr;
+
+            best_vc_I = ...
+                I_rr;
+
+            best_vc_metrics = ...
+                metrics_rr;
         end
 
-        cumulative_vc_time(rr) = vc_time_total;
-        cumulative_2opt_time(rr) = two_opt_time_total;
+        vc_best_jcommon_history(rr) = ...
+            best_vc_jcommon;
 
-        if any(rr==checkpoints)
+        cumulative_vc_time(rr) = ...
+            vc_time_total;
+
+        % No 2-opt has happened yet.
+        cumulative_2opt_time(rr) = 0;
+
+        % ---------------------------------------------------------------------
+        % Raw-rounding checkpoints
+        % ---------------------------------------------------------------------
+
+        if any(rr == checkpoints)
+
             cp_id = cp_id + 1;
-            checkpoint_records(cp_id).restart = rr;
-            checkpoint_records(cp_id).vc_best_jcommon = best_vc_jcommon;
-            checkpoint_records(cp_id).vc_time = vc_time_total;
-            checkpoint_records(cp_id).two_opt_time = two_opt_time_total;
-            if opts.use_2opt
-                checkpoint_records(cp_id).vc2_best_jcommon = best_vc2_jcommon;
-            else
-                checkpoint_records(cp_id).vc2_best_jcommon = NaN;
-            end
+
+            checkpoint_records(cp_id).restart = ...
+                rr;
+
+            checkpoint_records(cp_id).vc_best_jcommon = ...
+                best_vc_jcommon;
+
+            checkpoint_records(cp_id).vc_time = ...
+                vc_time_total;
+
+            % Under the new protocol 2-opt is done only once,
+            % after ALL rounding restarts finish.
+            checkpoint_records(cp_id).two_opt_time = ...
+                0;
+
+            checkpoint_records(cp_id).vc2_best_jcommon = ...
+                NaN;
         end
     end
+
+
+    %% ========================================================================
+    % Step 2: apply common 2-opt ONCE to the best RAW rounding solution
+    % ========================================================================
 
     if opts.use_2opt
-        chosen_I = best_vc2_I;
-        chosen_metrics = best_vc2_metrics;
-        chosen_label = "Vc+2opt";
-        chosen_restart = best_vc2_restart;
-    else
-        chosen_I = best_vc_I;
-        chosen_metrics = best_vc_metrics;
-        chosen_label = "Vc";
-        chosen_restart = best_vc_restart;
+
+        if isempty(best_vc_I) || ~isfinite(best_vc_jcommon)
+            error('eADMM raw rounding did not produce a valid solution.');
+        end
+
+        % Since there is now only ONE common postprocessing call,
+        % use the common base seed directly.
+        two_opt_seed_rr = ...
+            opts.two_opt_seed_base;
+
+        two_opt_seed(best_vc_restart) = ...
+            two_opt_seed_rr;
+
+        opt2 = struct();
+
+        opt2.seed = ...
+            two_opt_seed_rr;
+
+        opt2.cost_tol = ...
+            opts.two_opt_tol;
+
+        opt2.verbose = ...
+            opts.verbose_2opt;
+
+        opt2.eta = ...
+            opts.eval_eta;
+
+        r2 = ...
+            apply_common_two_opt( ...
+                best_vc_I, ...
+                problem, ...
+                opt2);
+
+        % Exactly ONE common 2-opt time.
+        two_opt_time_total = ...
+            r2.time;
+
+        best_vc2_jcommon = ...
+            r2.metrics_after.common_objective;
+
+        % Refined solution originates from the raw-best restart.
+        best_vc2_restart = ...
+            best_vc_restart;
+
+        best_vc2_I = ...
+            r2.I_after;
+
+        best_vc2_metrics = ...
+            r2.metrics_after;
+
+        % Backward-compatible arrays:
+        % only the chosen raw-best restart has a refined value.
+        vc2_jcommon(best_vc_restart) = ...
+            best_vc2_jcommon;
+
+        % The refined solution only becomes available after all R
+        % rounding restarts have completed.
+        vc2_best_jcommon_history(R) = ...
+            best_vc2_jcommon;
+
+        cumulative_2opt_time(R) = ...
+            two_opt_time_total;
+
+        % Update the final checkpoint (R is guaranteed to be a checkpoint).
+        if ~isempty(checkpoint_records)
+
+            cp_idx = ...
+                find( ...
+                    [checkpoint_records.restart] == R, ...
+                    1, ...
+                    'last');
+
+            if ~isempty(cp_idx)
+
+                checkpoint_records(cp_idx).two_opt_time = ...
+                    two_opt_time_total;
+
+                checkpoint_records(cp_idx).vc2_best_jcommon = ...
+                    best_vc2_jcommon;
+            end
+        end
+
+        fprintf( ...
+            ['[eADMM common2opt] raw 最优 restart=%d | ', ...
+            'raw J_common=%.10e -> refined J_common=%.10e | ', ...
+            '2-opt time=%.6f 秒\n'], ...
+            best_vc_restart, ...
+            best_vc_jcommon, ...
+            best_vc2_jcommon, ...
+            two_opt_time_total);
+
     end
 
+
+    %% ========================================================================
+    % Final chosen solution
+    % ========================================================================
+
+    if opts.use_2opt
+
+        chosen_I = ...
+            best_vc2_I;
+
+        chosen_metrics = ...
+            best_vc2_metrics;
+
+        chosen_label = ...
+            "best raw Vc + common2opt";
+
+        chosen_restart = ...
+            best_vc_restart;
+
+    else
+
+        chosen_I = ...
+            best_vc_I;
+
+        chosen_metrics = ...
+            best_vc_metrics;
+
+        chosen_label = ...
+            "Vc";
+
+        chosen_restart = ...
+            best_vc_restart;
+    end
     %% ======================== Result struct ================================
     result = struct();
     result.method = "eADMM-SDP";
@@ -551,8 +743,9 @@ function result = solve_eadmm_batching(problem, opts)
     fprintf('*eADMM DNN 迭代数 = %d*\n', dnn_iterations);
     fprintf('*eADMM 每次 DNN 迭代平均时间 = %.6e 秒/iter*\n', dnn_avg_iter_time);
     fprintf('*eADMM DNN 求解总时间 = %.6f 秒*\n', dnn_solve_time);
-    fprintf('*eADMM 最佳 raw Vc J_common = %.10e*（restart %d）\n', ...
-        best_vc_jcommon,best_vc_restart);
+    fprintf(['eADMM raw 最优解 + common2opt J_common = %.10e ', ...
+    '（raw restart %d）。\n'], ...
+    best_vc2_jcommon,best_vc_restart);
     fprintf('*eADMM raw 解生成总时间 = %.6f 秒*（DNN求解 + 全部rounding）\n', ...
         result.solution_time_raw);
     if opts.use_2opt

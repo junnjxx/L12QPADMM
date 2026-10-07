@@ -12,30 +12,35 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
 %       s.t.   m_i in {0,1}
 %              sum_i m_i = k
 %
-% Introduce W_ij = m_i*m_j. The paper uses:
+% Introduce W_ij = m_i*m_j.
 %
-%   if Z_ij < 0:
+% If Z_ij < 0:
 %
 %       -m_i - m_j + 2 W_ij <= 0
 %
-%   if Z_ij >= 0:
+% If Z_ij >= 0:
 %
 %        m_i + m_j - 2 W_ij <= 1
 %
-% and then relaxes
+% Continuous relaxation:
 %
 %       0 <= m_i <= 1,
 %       0 <= W_ij <= 1.
 %
-% IMPORTANT
-% This intentionally reproduces the sign-dependent relaxation in the paper.
+% IMPORTANT:
+% This reproduces the sign-dependent relaxation in the paper.
 % It is NOT replaced by the full McCormick envelope.
 %
-% Variable ordering:
+% Timing convention:
 %
-%       x = [m ; vec(W)]
+%   info.model_build_time
+%       construction of f,A,b,Aeq,beq,lb,ub and linprog options
 %
-% where W uses MATLAB column-major ordering.
+%   info.solve_time
+%       ONLY the actual linprog call
+%
+%   info.postsolve_time
+%       extraction and feasibility diagnostics after linprog
 %
 
     if nargin < 3 || isempty(opts)
@@ -67,38 +72,35 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
             'Z contains NaN/Inf.');
     end
 
+    %% ============================================================
+    % LP model construction
     % ============================================================
+
+    model_tic = tic;
+
+    % ------------------------------------------------------------
     % Variables
     %
     % x = [m ; vec(W)]
-    % ============================================================
+    % ------------------------------------------------------------
 
     n_m = q;
     n_w = q*q;
-    n_var = n_m + n_w;
+    n_var = n_m+n_w;
 
-    % ============================================================
+    % ------------------------------------------------------------
     % Objective
     %
-    % sum_ij Z_ij W_ij
-    % ============================================================
+    % min sum_ij Z_ij W_ij
+    % ------------------------------------------------------------
 
-    f = [zeros(q,1); Z(:)];
+    f = [zeros(q,1);Z(:)];
 
-    % ============================================================
-    % Inequality constraints
+    % ------------------------------------------------------------
+    % Sign-dependent inequalities
     %
-    % Exactly one inequality per ordered pair (i,j).
-    %
-    % Each row initially contributes three entries:
-    %
-    %     coefficient of m_i
-    %     coefficient of m_j
-    %     coefficient of W_ij
-    %
-    % For i=j the duplicate m entries are automatically summed by
-    % sparse(), which gives the correct coefficient +/-2.
-    % ============================================================
+    % Exactly one inequality for every ordered pair (i,j).
+    % ------------------------------------------------------------
 
     n_ineq = q*q;
 
@@ -115,62 +117,62 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
 
         for ii = 1:q
 
-            row = row + 1;
+            row = row+1;
 
             w_local = sub2ind([q,q],ii,jj);
-            w_col = q + w_local;
+            w_col = q+w_local;
 
             if Z(ii,jj) < 0
 
-                % ------------------------------------------------
-                % -m_i - m_j + 2 W_ij <= 0
-                % ------------------------------------------------
+                % -m_i -m_j +2 W_ij <= 0
 
-                ptr = ptr + 1;
-                I(ptr) = row;
-                J(ptr) = ii;
-                V(ptr) = -1;
+                ptr = ptr+1;
+                I(ptr)=row;
+                J(ptr)=ii;
+                V(ptr)=-1;
 
-                ptr = ptr + 1;
-                I(ptr) = row;
-                J(ptr) = jj;
-                V(ptr) = -1;
+                ptr = ptr+1;
+                I(ptr)=row;
+                J(ptr)=jj;
+                V(ptr)=-1;
 
-                ptr = ptr + 1;
-                I(ptr) = row;
-                J(ptr) = w_col;
-                V(ptr) = 2;
+                ptr = ptr+1;
+                I(ptr)=row;
+                J(ptr)=w_col;
+                V(ptr)=2;
 
-                b(row) = 0;
+                b(row)=0;
 
             else
 
-                % ------------------------------------------------
-                % m_i + m_j - 2 W_ij <= 1
-                % ------------------------------------------------
+                % m_i +m_j -2 W_ij <= 1
 
-                ptr = ptr + 1;
-                I(ptr) = row;
-                J(ptr) = ii;
-                V(ptr) = 1;
+                ptr = ptr+1;
+                I(ptr)=row;
+                J(ptr)=ii;
+                V(ptr)=1;
 
-                ptr = ptr + 1;
-                I(ptr) = row;
-                J(ptr) = jj;
-                V(ptr) = 1;
+                ptr = ptr+1;
+                I(ptr)=row;
+                J(ptr)=jj;
+                V(ptr)=1;
 
-                ptr = ptr + 1;
-                I(ptr) = row;
-                J(ptr) = w_col;
-                V(ptr) = -2;
+                ptr = ptr+1;
+                I(ptr)=row;
+                J(ptr)=w_col;
+                V(ptr)=-2;
 
-                b(row) = 1;
+                b(row)=1;
 
             end
 
         end
 
     end
+
+    % sparse() automatically sums duplicated entries.
+    % Hence when ii==jj the coefficient of m_i becomes +/-2,
+    % exactly as required.
 
     A = sparse( ...
         I(1:ptr), ...
@@ -179,11 +181,11 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
         n_ineq, ...
         n_var);
 
-    % ============================================================
-    % Equality
+    % ------------------------------------------------------------
+    % Cardinality constraint
     %
     % sum_i m_i = k
-    % ============================================================
+    % ------------------------------------------------------------
 
     Aeq = sparse( ...
         ones(q,1), ...
@@ -194,24 +196,21 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
 
     beq = k;
 
-    % ============================================================
-    % Continuous relaxation
-    %
-    % 0 <= m,W <= 1
-    % ============================================================
+    % ------------------------------------------------------------
+    % Continuous relaxation bounds
+    % ------------------------------------------------------------
 
     lb = zeros(n_var,1);
     ub = ones(n_var,1);
 
-    % Do not force a specific linprog algorithm here. This makes the code
-    % compatible across MATLAB releases while leaving the mathematical LP
-    % unchanged.
     lp_opts = optimoptions( ...
         'linprog', ...
         'Display',opts.display);
 
-    % ============================================================
-    % Solve
+    model_build_time = toc(model_tic);
+
+    %% ============================================================
+    % Actual LP solve
     % ============================================================
 
     solve_tic = tic;
@@ -229,7 +228,7 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
     if isempty(x) || exitflag <= 0
         error('mmdlp_solve_relaxation:LinprogFailure', ...
             ['linprog failed. exitflag=%d. ', ...
-             'See returned solver output for details.'], ...
+             'See solver output for details.'], ...
             exitflag);
     end
 
@@ -238,12 +237,20 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
             'linprog returned NaN/Inf.');
     end
 
-    m_relaxed = x(1:q);
-    W_relaxed = reshape(x(q+1:end),q,q);
+    %% ============================================================
+    % Post-solve extraction and diagnostics
+    % ============================================================
 
-    % ============================================================
-    % Numerical checks
-    % ============================================================
+    post_tic = tic;
+
+    m_relaxed = x(1:q);
+
+    W_relaxed = ...
+        reshape(x(q+1:end),q,q);
+
+    % ------------------------------------------------------------
+    % Numerical feasibility checks
+    % ------------------------------------------------------------
 
     bound_violation = max([ ...
         max(-x), ...
@@ -259,16 +266,39 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
     max_feas_residual = max([ ...
         bound_violation, ...
         cardinality_residual, ...
-        inequality_violation]);
+        inequality_violation, ...
+        0]);
+
+    % Remove negative signed zero in printed diagnostics.
+    if abs(max_feas_residual) == 0
+        max_feas_residual = 0;
+    end
+
+    if abs(bound_violation) == 0
+        bound_violation = 0;
+    end
+
+    if abs(cardinality_residual) == 0
+        cardinality_residual = 0;
+    end
+
+    if abs(inequality_violation) == 0
+        inequality_violation = 0;
+    end
 
     if max_feas_residual > opts.feasibility_tol
+
         warning('mmdlp_solve_relaxation:LPResidual', ...
             ['LP solution feasibility residual %.3e exceeds ', ...
              'diagnostic tolerance %.3e.'], ...
-            max_feas_residual,opts.feasibility_tol);
+            max_feas_residual, ...
+            opts.feasibility_tol);
+
     end
 
-    % ============================================================
+    postsolve_time = toc(post_tic);
+
+    %% ============================================================
     % Return diagnostics
     % ============================================================
 
@@ -279,19 +309,33 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
     info.output = output;
     info.lambda = lambda;
 
+    % Timing
+    info.model_build_time = model_build_time;
     info.solve_time = solve_time;
+    info.postsolve_time = postsolve_time;
 
+    % Dimensions
     info.num_m_variables = n_m;
     info.num_w_variables = n_w;
     info.num_variables = n_var;
+
     info.num_inequalities = n_ineq;
     info.num_equalities = 1;
 
-    info.cardinality_residual = cardinality_residual;
-    info.bound_violation = bound_violation;
-    info.inequality_violation = inequality_violation;
-    info.max_feasibility_residual = max_feas_residual;
+    % Feasibility
+    info.cardinality_residual = ...
+        cardinality_residual;
 
-    % Retain W only for diagnostics. The paper rounds m, not W.
+    info.bound_violation = ...
+        bound_violation;
+
+    info.inequality_violation = ...
+        inequality_violation;
+
+    info.max_feasibility_residual = ...
+        max_feas_residual;
+
+    % Diagnostic only.
+    % The paper rounds m, not W.
     info.W_relaxed = W_relaxed;
 end
