@@ -1,0 +1,10 @@
+GraphPartition GitHub latest + Vector + MMDLP: STATIC / MATHEMATICAL AUDIT
+Files: 66 total, 56 MATLAB source.
+Source: four MMDLP core/audit files byte-for-byte identical to user-uploaded latest ZIP; SHA256 recorded in SOURCE_HASHES.tsv.
+Entrypoint: MMDLP selectable via config_graph.m; no automatic smoke/integration tests.
+MMDLP graph model: Z_g=0.5*L(Q,Q), using FULL graph Laplacian principal block.
+External MATLAB dependencies: MMDLP=linprog (Optimization Toolbox); Lp=MOSEK.
+Mathematical verification (SciPy independent translation of LP model): n=8,9,12, LP<=IQP<=rounded, graph contribution identity.
+Official data: 30 adjacency matrices from rand20/50/80; graph cut algebra and group decomposition verified.
+Shell: bash -n PASS.
+MATLAB integration test script included but NOT executed (no MATLAB available).
