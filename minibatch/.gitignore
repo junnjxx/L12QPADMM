@@ -1,0 +1,15 @@
+
+# 默认忽略全部文件，但允许遍历子目录
+*
+!*/
+
+# 纳入 MATLAB、Python 代码及忽略规则
+!*.m
+!*.py
+!.gitignore
+
+# 排除环境和缓存
+.venv/
+venv/
+__pycache__/
+.ipynb_checkpoints/
