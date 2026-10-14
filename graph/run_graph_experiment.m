@@ -135,7 +135,7 @@ for t=1:numel(methods)
             solve_t=raw.solve_time; % actual linprog time only
             extract_t=raw.init_extract_time; % all other raw method work
             iters=raw.num_lp_solves;
-            native=false; % LP output needs top-b rounding
+            native=raw.native_valid;; % LP output needs top-b rounding
             lb=NaN; % stage-wise LP bounds are NOT a global cut LB
         case 'vector'
             % A_g=L(Q,Q) for each sequential graph-cut group subproblem.

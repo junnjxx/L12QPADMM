@@ -12,14 +12,15 @@ function exp_result = run_lp_baseline(problem,cfg)
 % Both variants may then be passed through the SAME project-wide common 2-opt.
 % This is deliberately separate from Algorithm 2's internal N2 search.
 
-    capacities = problem.batch_size * ones(problem.num_batches,1);
+   capacities = problem.batch_size * ones(problem.num_batches,1);
 
-    % f(X) = J_common(X) on the continuous transportation polytope.
-    model = make_quadratic_model(problem.A,0.5);
+    lp_objective_scale = max(1,norm(problem.L,inf));
+    A_lp = problem.L/lp_objective_scale;
 
+    model = make_quadratic_model(A_lp,0.5);
     curvature_lower = NaN;
     if cfg.lp.use_curvature_sigma0
-        curvature_lower = lp_quadratic_curvature_lower(problem.A);
+        curvature_lower = lp_quadratic_curvature_lower(A_lp);
         model.curvature_lower = curvature_lower;
     else
         model.curvature_lower = [];
@@ -96,8 +97,10 @@ function exp_result = run_lp_baseline(problem,cfg)
                 continue;
             end
 
-            obj_err = abs(algout.f_best-metrics.common_objective);
-            obj_tol = 1e-9*max([1,abs(algout.f_best),abs(metrics.common_objective)]);
+            f_best_original = lp_objective_scale*algout.f_best;
+            obj_err = abs(f_best_original-metrics.common_objective);
+            obj_tol = 1e-9*max([1,abs(f_best_original), ...
+                                abs(metrics.common_objective)]);
             if obj_err > obj_tol
                 error('%s objective/J_common mismatch on start %d: %.3e.',label,rr,obj_err);
             end

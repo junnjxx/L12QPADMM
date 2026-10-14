@@ -1,12 +1,12 @@
 function result = run_vector_graph_baseline(problem,cfg)
-%RUN_VECTOR_GRAPH_BASELINE Sequential graph-cut k-equipartition with ORIGINAL vector_splitadmm.
+%RUN_VECTOR_GRAPH_BASELINE Sequential graph-cut k-equipartition with Matrix-aligned X-first vector ADMM.
 %
 % Let P=[p_1,...,p_k] be a balanced binary assignment. Exactly:
 %     Cut(P) = 0.5*trace(P'*L*P) = sum_g 0.5*p_g'*L*p_g.
 % When selecting group g from the remaining vertices Q, the unselected
 % group indicator x is zero outside Q and its exact group contribution is
 %     0.5*x'*L(Q,Q)*x,  sum(x)=group_size, x binary.
-% We pass A_g=L(Q,Q) to the user's unmodified vector_splitadmm solver.
+% We pass A_g=L(Q,Q) to the Matrix-aligned vector_splitadmm solver.
 % This is a SEQUENTIAL GREEDY decomposition: the current group is optimized
 % without lookahead, unlike simultaneous full-assignment Matrix/Lp.
 % In particular NO old build_mmd_batch_Z or minibatch Phi is used here.
@@ -45,27 +45,31 @@ for g=1:k
     % Full graph Laplacian principal block: DO NOT construct an induced
     % subgraph Laplacian here, because that changes the global cut objective.
     Z=L(Q,Q);
-    x0=(group_size/nq)*ones(nq,1)+(rand(nq,1)-0.5)*0.1/nq;
-    y0=(group_size/nq)*ones(nq,1)+(rand(nq,1)-0.5)*0.1/nq;
+    % Match the current Matrix uniform initializer: 1/B + jitter/(B*100),
+    % using the effective number of remaining groups B=nq/group_size.
+    effective_B=nq/group_size;
+    x0=ones(nq,1)/effective_B+(rand(nq,1)-0.5)/(effective_B*100);
+    y0=ones(nq,1)/effective_B+(rand(nq,1)-0.5)/(effective_B*100);
     steps(g).model_build_sec=toc(tbuild);
     model_build_time=model_build_time+steps(g).model_build_sec;
     ts=tic;
-    [~,y,niter]=vector_splitadmm(Z,group_size,cfg.vector,x0,y0);
+    [x,~,niter,vinfo]=vector_splitadmm(Z,group_size,cfg.vector,x0,y0);
     steps(g).solve_sec=toc(ts);
     solve_time=solve_time+steps(g).solve_sec;
     iterations=iterations+niter;
     steps(g).iterations=niter;
-    if any(~isfinite(y)),error('Vector: nonfinite y in group %d',g);end
+    if any(~isfinite(x)),error('Vector: nonfinite x in group %d',g);end
     tsel=tic;
-    if sum(y==1)==group_size && all(y==0|y==1)
-        pick=find(y==1);
+    % Matrix puts the half-thresholding on X; extract from X, not Y.
+    if vinfo.native_valid
+        pick=find(round(x)==1);
         exact_count=exact_count+1;
         steps(g).exact=true;
     else
         if strcmpi(char(string(cfg.vector.fallback)),'error')
             error('Vector group %d did not yield an exact binary cardinality-%d vector',g,group_size);
         end
-        [~,ord]=sort(y,'descend');
+        [~,ord]=sort(x,'descend');
         pick=ord(1:group_size);
         fallback_count=fallback_count+1;
         steps(g).fallback=true;

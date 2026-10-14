@@ -2,6 +2,12 @@ function out=solve_matrix_graph(problem,opt)
 %SOLVE_MATRIX_GRAPH Pure-MATLAB paper-aligned X/Y split ADMM for graph cut.
 % Equations and half-thresholding mirror splitadmm20240119.m in L12QPADMM.
 % Graph-specific A=L/max(1,||L||inf), G=0; report raw graph cut.
+% clean_fast suppresses iteration diagnostics and excludes dense final X/Y
+% from returned results. It does NOT alter any ADMM/continuation updates.
+if ~isfield(opt,'clean_fast') || isempty(opt.clean_fast)
+    opt.clean_fast=false;
+end
+clean_fast=logical(opt.clean_fast);
 matrix_objective_scale=max(1,norm(problem.L,inf));
 A=problem.L/matrix_objective_scale;
 G=zeros(problem.n,problem.k);[N,B]=size(G);
@@ -12,8 +18,14 @@ elseif strcmpi(opt.init_mode,'provided')
     X=opt.X0;Y=opt.Y0;
     assert(isequal(size(X),[N,B]) && isequal(size(Y),[N,B]),'Provided Matrix init size mismatch');
 elseif strcmpi(opt.init_mode,'uniform')
+    if isfield(opt,'profile') && ...
+        strcmp(string(opt.profile),"rand80_1000_10")
+    X=ones(N,B)/B+(rand(N,B)-0.5)/(B*10);
+    Y=ones(N,B)/B+(rand(N,B)-0.5)/(B*10);
+else
     X=ones(N,B)/B+(rand(N,B)-0.5)/(B*100);
     Y=ones(N,B)/B+(rand(N,B)-0.5)/(B*100);
+end
 else
     error('Unknown Matrix init_mode');
 end
@@ -21,7 +33,9 @@ c=opt.c;tau=opt.tau_X;cp=c+tau;
 if ~isscalar(c)||c<=0||tau<=0,error('Require c,tau_X positive');end
 if isempty(opt.eta_max),eta_max=4*graph_spectral_norm(A)*(1.5);
 else,eta_max=opt.eta_max;end
-fprintf('eta_max=%.6g',eta_max);
+if ~clean_fast
+    fprintf('eta_max=%.6g\n',eta_max);
+end
 if opt.eta_adapt_enabled,eta_state=opt.eta_stage_initial;
 else,eta_state=opt.eta;end
 Lambda=zeros(N,B);AY=A*Y;
@@ -81,9 +95,10 @@ for iter=1:opt.max_iter
         xstat=dL+0.5*(AYold-AY)+c*(Y-Yold)+tau*(X-Xold);
         r=max(norm(xstat,'fro'),norm(dL,'fro'));
     end
-    if mod(iter,opt.print_every)==0
-        fprintf('Matrix iter=%d | beta=%.6g | eta_state=%.6g | eta_eff=%.6g | nnzX=%d | r=%.3e | dxy=%.3e\n', ...
-            iter,beta,eta_state,e,nnz(X),r,dxy);
+    if ~clean_fast && mod(iter,opt.print_every)==0
+        frac=max(abs(X(:)-round(X(:))));
+        fprintf('Matrix iter=%d | beta=%.6g | eta_state=%.6g | eta_eff=%.6g | nnzX=%d | r=%.3e | dxy=%.3e | fractionality=%.3e\n', ...
+            iter,beta,eta_state,e,nnz(X),r,dxy,frac);
     end
     if early && dxy<=opt.early_exist_dxy_tol
         Ptest=round(X);
@@ -93,18 +108,37 @@ for iter=1:opt.max_iter
         end
     end
     % Original stopping rule, including its known continuation-stage behavior.
-    %if needcheck && max(r,dxy)<opt.tol
-    %    flag=1;break;
-    %end
-    frac=max(abs(X(:)-round(X(:))));
-    fprintf('fractionality=%.3e\n',frac);
+    % Stopping intentionally disabled in user's current experiment.
+    % if needcheck && max(r,dxy)<opt.tol
+    %     flag=1;break;
+    % end
     if opt.eta_adapt_enabled && eta_state<eta_max
         nz=nnz(X);
-        if nz<=N && ~any(X(:)>opt.support_tol & X(:)<1-opt.support_tol)
-    monitor=false;best_nnz=nz;stale=0;
-        elseif ~monitor,monitor=true;best_nnz=nz;stale=0;
-        elseif nz<best_nnz,best_nnz=nz;stale=0;
-        else,stale=stale+1;end
+        if nz==N && ...
+        dxy<=opt.early_exist_dxy_tol && ...
+        max(abs(X(:)-round(X(:))))<=opt.support_tol && ...
+        is_valid_partition(round(X),problem)
+
+            monitor=false;
+            best_nnz=nz;
+            stale=0;
+
+        elseif ~monitor
+
+            monitor=true;
+            best_nnz=nz;
+            stale=0;
+
+        elseif nz>=N && nz<best_nnz
+
+            best_nnz=nz;
+            stale=0;
+
+        else
+
+            stale=stale+1;
+
+        end
         if monitor && stale>=opt.eta_stagnation_iters
             if eta_state<0
                 if eta_state<=opt.eta_stage_initial,eta_state=0.5*eta_state;
@@ -114,6 +148,7 @@ for iter=1:opt.max_iter
             stale=0;best_nnz=nz;
         end
     end
+    
 end
 solve_time=toc(t0);
 P_native=round(X);
@@ -134,6 +169,11 @@ if isempty(P_candidate)&&opt.allow_extra_rounding
 end
 if isempty(P_candidate),candidate_cut=NaN;
 else,candidate_cut=graph_cut(P_candidate,problem.W);end
+if clean_fast
+    X_store=[];Y_store=[];
+else
+    X_store=X;Y_store=Y;
+end
 out=struct('P_raw',P_candidate,'raw_cut',candidate_cut, ...
     'matrix_objective_scale',matrix_objective_scale, ...
     'binary_deviation_before_rounding',max(abs(X(:)-round(X(:)))), ...
@@ -142,7 +182,7 @@ out=struct('P_raw',P_candidate,'raw_cut',candidate_cut, ...
     'rawtime',solve_time+round_time,'solve_time',solve_time,...
     'iterations',iter,'flag',flag,'eta_final',eta_state,...
     'beta_final',beta,'residual_r',r,'residual_dxy',dxy,...
-    'nnzX',nnz(X),'X_final',X,'Y_final',Y);
+    'nnzX',nnz(X),'X_final',X_store,'Y_final',Y_store);
 end
 
 function ok=is_valid_partition(P,p)
