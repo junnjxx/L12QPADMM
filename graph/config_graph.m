@@ -11,7 +11,7 @@ cfg.graph.mat_path='';
 cfg.graph.variable='';
 cfg.graph.W=[];
 cfg.methods.run={'eADMM','Lp','MMDLP','Matrix','Vector'};
-cfg.methods.run={'eADMM','Matrix','Vector'};
+cfg.methods.run={'Lp'};
 % Matrix: exact same X-first, Y-affine updates as v3; only A=L/s_L.
 cfg.exp.profile = "rand50_1000_10"; %rand80_1000_10
 cfg.matrix.clean_fast = true;
@@ -174,7 +174,7 @@ cfg.matrix.support_tol=1e-10;
 cfg.matrix.allow_extra_rounding=false; % clearly marked heuristic, never native
 
 % LATEST uploaded Lp Algorithm 2 (MOSEK projection + accelerated exact N2).
-cfg.lp.enabled=true; cfg.lp.run_alg2=true; cfg.lp.run_bs=true;
+cfg.lp.enabled=true; cfg.lp.run_alg2=true; cfg.lp.run_bs=false;
 cfg.lp.num_starts=1; cfg.lp.p=0.75;
 cfg.lp.eps0=0.1; cfg.lp.eps_min=1e-3;
 cfg.lp.sigma_max=1e6; cfg.lp.gamma=0.9;

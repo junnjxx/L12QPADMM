@@ -93,6 +93,10 @@ end
 % Best discrete incumbent.
 f_best = inf;
 X_best = [];
+% Lp-raw uses exactly the SAME Algorithm-2 trajectory, before internal N2.
+f_best_raw = inf;
+X_best_raw = [];
+best_raw_pre_round_X = [];
 % Warm-start diagnostic for the later Matrix run.
 % Across ALL outer stages and ALL inner iterations, remember the CONTINUOUS
 % iterate immediately BEFORE rounding whose rounded/refined discrete candidate
@@ -236,6 +240,16 @@ for k = 0:opts.max_outer-1
             [Xhat,rt] = timed_round(Xnew);
             profile.rounding_time = profile.rounding_time + rt;
             profile.rounding_calls = profile.rounding_calls + 1;
+            % Track the best greedy-rounded solution BEFORE internal N2.
+            traw = tic;
+            fround = model.fun(Xhat);
+            profile.objective_only_time = profile.objective_only_time + toc(traw);
+            profile.objective_only_calls = profile.objective_only_calls + 1;
+            if fround < f_best_raw
+                f_best_raw = fround;
+                X_best_raw = Xhat;
+                best_raw_pre_round_X = Xnew;
+            end
             if opts.do_local_search
                 % Reuse only for the default deterministic quadratic N2
                 % routine. Custom local-search callbacks are not assumed
@@ -274,10 +288,7 @@ for k = 0:opts.max_outer-1
                     end
                 end
             else
-                tt = tic;
-                fhat = model.fun(Xhat);
-                profile.objective_only_time = profile.objective_only_time + toc(tt);
-                profile.objective_only_calls = profile.objective_only_calls + 1;
+                fhat = fround; % Already evaluated for Lp-raw; no duplicate call.
             end
             if fhat < stage_best
                 stage_best = fhat;
@@ -373,6 +384,15 @@ for k = 0:opts.max_outer-1
         [Xhat,rt] = timed_round(X);
         profile.rounding_time = profile.rounding_time + rt;
         profile.rounding_calls = profile.rounding_calls + 1;
+        traw = tic;
+        fround = model.fun(Xhat);
+        profile.objective_only_time = profile.objective_only_time + toc(traw);
+        profile.objective_only_calls = profile.objective_only_calls + 1;
+        if fround < f_best_raw
+            f_best_raw = fround;
+            X_best_raw = Xhat;
+            best_raw_pre_round_X = X;
+        end
         if opts.do_local_search
             [Xhat,stage_best,lt,linfo] = timed_local_search(Xhat);
             profile.internal_local_search_time = profile.internal_local_search_time + lt;
@@ -380,10 +400,7 @@ for k = 0:opts.max_outer-1
             if isfield(linfo,'nswap'), profile.local_swaps = profile.local_swaps + linfo.nswap; end
             if isfield(linfo,'nsweep'), profile.local_sweeps = profile.local_sweeps + linfo.nsweep; end
         else
-            tt = tic;
-            stage_best = model.fun(Xhat);
-            profile.objective_only_time = profile.objective_only_time + toc(tt);
-            profile.objective_only_calls = profile.objective_only_calls + 1;
+            stage_best = fround;
         end
         stage_Xbest = Xhat;
         if stage_best < best_jcommon_post_round_score
@@ -467,6 +484,15 @@ if isempty(X_best)
     [X_best,rt] = timed_round(Xk);
     profile.rounding_time = profile.rounding_time + rt;
     profile.rounding_calls = profile.rounding_calls + 1;
+    traw = tic;
+    fround = model.fun(X_best);
+    profile.objective_only_time = profile.objective_only_time + toc(traw);
+    profile.objective_only_calls = profile.objective_only_calls + 1;
+    if fround < f_best_raw
+        f_best_raw = fround;
+        X_best_raw = X_best;
+        best_raw_pre_round_X = Xk;
+    end
     if opts.do_local_search
         [X_best,f_best,lt,linfo] = timed_local_search(X_best);
         profile.internal_local_search_time = profile.internal_local_search_time + lt;
@@ -474,9 +500,7 @@ if isempty(X_best)
         if isfield(linfo,'nswap'), profile.local_swaps = profile.local_swaps + linfo.nswap; end
         if isfield(linfo,'nsweep'), profile.local_sweeps = profile.local_sweeps + linfo.nsweep; end
     else
-        tt=tic; f_best=model.fun(X_best);
-        profile.objective_only_time = profile.objective_only_time + toc(tt);
-        profile.objective_only_calls = profile.objective_only_calls + 1;
+        f_best = fround;
     end
 end
 profile.total_time = toc(wall_tic);
@@ -487,6 +511,10 @@ profile.other_time = max(profile.total_time-classified,0);
 profile.classified_fraction = classified/max(profile.total_time,eps);
 result.X_best = X_best;
 result.f_best = f_best;
+% Independent best pre-N2 discrete incumbent; never feeds continuation.
+result.X_best_raw = X_best_raw;
+result.f_best_raw = f_best_raw;
+result.best_raw_pre_round_X = best_raw_pre_round_X;
 result.X_cont = Xk;
 result.history = history;
 result.settings = opts;

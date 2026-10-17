@@ -59,6 +59,9 @@ function print_comparison_report(report, results, problem, cfg)
         if L.alg2.enabled
             print_lp_key_summary(L.alg2,'Lp-Alg2（完整 Algorithm 2，含内部 N2）');
         end
+        if L.raw_pre_n2.enabled
+            print_lp_key_summary(L.raw_pre_n2,'Lp-raw（同 Alg2 轨迹；内部 N2 前最佳）');
+        end
         if L.bs.enabled
             print_lp_key_summary(L.bs,'Lp-bs（关闭内部 N2）');
         end
@@ -123,7 +126,7 @@ function print_comparison_report(report, results, problem, cfg)
     fprintf('\n==================== 初始化质量 vs 2-opt 诊断 ====================\n');
     fprintf('说明：用于判断高质量解来自前面的 solver，还是主要来自后续 2-opt。\n');
     disp(report.family_table);
-    fprintf('Lp-Alg2 的 raw 已经包含论文内部 N2；Lp-bs 的 raw 不包含内部 N2。\n');
+    fprintf('Lp-Alg2 raw 含内部 N2；Lp-raw 同轨迹、N2 前 greedy rounding；Lp-bs 独立无 N2。\n');
     if isfinite(report.post_best_spread_pct)
         fprintf('统一2-opt后，各方法 BEST J_common 的相对跨度 = %.6f%%。\n',report.post_best_spread_pct);
         fprintf('统一2-opt后，各方法 MEAN J_common 的相对跨度 = %.6f%%。\n',report.post_mean_spread_pct);
@@ -233,6 +236,10 @@ function print_comparison_report(report, results, problem, cfg)
         if L.alg2.enabled
             print_lp_variant(L.alg2,'Lp-Alg2');
         end
+        if L.raw_pre_n2.enabled
+            print_lp_variant(L.raw_pre_n2,'Lp-raw');
+            fprintf('Lp-raw 的 solve 时间与 Lp-Alg2 共享（含内部 N2），不可累加为两次求解时间。\n');
+        end
         if L.bs.enabled
             print_lp_variant(L.bs,'Lp-bs');
         end
@@ -262,7 +269,7 @@ function print_comparison_report(report, results, problem, cfg)
     fprintf('1) 带 * 的量是建议重点比较的指标。\n');
     fprintf('2) 所有方法解质量统一看 J_common；越小越好。\n');
     fprintf('3) Matrix / Random / eADMM 的 raw 均在统一 2-opt 之前。\n');
-    fprintf('4) Lp-Alg2 raw 已包含论文内部 N2；Lp-bs raw 不包含内部 N2。\n');
+    fprintf('4) Lp-raw 与 Lp-Alg2 共用连续轨迹，报告的是内部 N2 前的最佳解；Lp-bs 单独运行。\n');
     fprintf('5) certified gap 对所有方法使用同一个安全 J_common 下界。\n');
     fprintf('6) MET 和 LB post-processing 是认证开销，不计入 eADMM 的解生成时间。\n');
 

@@ -223,6 +223,15 @@ function print_selected_methods_report(report,results,problem,cfg)
                 'Lp-Alg2');
         end
 
+        if isfield(L,'raw_pre_n2') && ...
+                L.raw_pre_n2.enabled
+
+            print_lp_variant( ...
+                L.raw_pre_n2, ...
+                'Lp-raw');
+            fprintf('Lp-raw shares the full Alg2 solve: reported solve times include Alg2 internal N2 and must not be added to Alg2 times.\n');
+        end
+
         if isfield(L,'bs') && ...
                 L.bs.enabled
 

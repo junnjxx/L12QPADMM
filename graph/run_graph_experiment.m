@@ -94,8 +94,8 @@ for t=1:numel(methods)
             raw=run_lp_baseline(problem,lpconfig);
             prior.lp=raw;
             results.lp=raw;
-            % Separate two variants as two methods in report.
-            kinds={'alg2','bs'};
+            % Lp-raw shares the Alg2 solve/trajectory; it does not rerun LP.
+            kinds={'alg2','raw_pre_n2','bs'};
             for q=1:numel(kinds)
                 vk=kinds{q};v=raw.(vk);
                 if ~v.enabled,continue;end
@@ -105,6 +105,7 @@ for t=1:numel(methods)
                 val=evaluate_partition(P,problem);
                 assert(val.valid,'Lp invalid graph partition');
                 ss=struct();ss.method=['Lp-',vk];ss.valid=true;ss.native=false;
+                if strcmp(vk,'raw_pre_n2'),ss.method='Lp-raw';end
                 ss.raw_cut=val.common_objective;
                 ss.post_cut=val.common_objective;
                 ss.SolveTimeSec=sum(v.solve_time);

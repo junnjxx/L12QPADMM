@@ -39,6 +39,13 @@ function exp_result = run_lp_baseline(problem,cfg)
         exp_result.alg2 = empty_variant();
     end
 
+    % This is a second OUTPUT from the full Alg2 run, not a second solve.
+    if exp_result.alg2.enabled
+        exp_result.raw_pre_n2 = build_raw_pre_n2(exp_result.alg2);
+    else
+        exp_result.raw_pre_n2 = empty_variant();
+    end
+
     if cfg.lp.run_bs
         fprintf('\n---- Lp-bs：关闭内部 N2，仅保留 Lp continuation + rounding ----\n');
         exp_result.bs = run_variant('Lp-bs',false);
@@ -58,6 +65,68 @@ function exp_result = run_lp_baseline(problem,cfg)
         for q=1:numel(fn)
             exp_result.(fn{q}) = exp_result.bs.(fn{q});
         end
+    end
+
+    function v = build_raw_pre_n2(alg2)
+        % Reuse the exact Lp-Alg2 solve, its random seed and continuation.
+        % Only the reported candidate is the best greedy rounding before N2.
+        v = alg2;
+        v.label = 'Lp-raw';
+        v.shares_alg2_trajectory = true;
+        v.raw_I = cell(size(alg2.raw_I));
+        v.raw_jcommon = nan(size(alg2.raw_jcommon));
+        v.refined = cell(size(alg2.refined));
+        v.refined_jcommon = nan(size(alg2.refined_jcommon));
+        v.local_time = zeros(size(alg2.local_time));
+        v.valid = false(size(alg2.valid));
+        for rr = 1:numel(alg2.raw)
+            if ~alg2.valid(rr), continue; end
+            algout = alg2.raw{rr};
+            P = algout.X_best_raw;
+            met = evaluate_partition(P,problem,cfg.matrix.eta);
+            if ~met.valid
+                error('Lp-raw start %d did not return a valid balanced assignment.',rr);
+            end
+            original_score = lp_objective_scale * algout.f_best_raw;
+            err = abs(original_score-met.common_objective);
+            tol = 1e-9*max([1,abs(original_score),abs(met.common_objective)]);
+            if err > tol
+                error('Lp-raw objective/J_common mismatch at start %d: %.3e.',rr,err);
+            end
+            [I,status] = assignment_to_batches(P,problem.batch_size,1e-12);
+            if isempty(I)
+                error('Lp-raw start %d extraction failed (%s).',rr,string(status));
+            end
+            v.valid(rr) = true;
+            v.raw_I{rr} = I;
+            v.raw_jcommon(rr) = met.common_objective;
+            % Align exposed per-start discrete result with the raw label.
+            v.raw{rr}.X_best = P;
+            v.raw{rr}.f_best = algout.f_best_raw;
+            v.raw{rr}.best_jcommon_pre_round_X = algout.best_raw_pre_round_X;
+            v.raw{rr}.best_jcommon_post_round_score = algout.f_best_raw;
+            if cfg.lp.use_common_2opt
+                opt2 = struct('seed',cfg.seed.two_opt_base+rr-1, ...
+                    'cost_tol',cfg.two_opt.cost_tol, ...
+                    'verbose',cfg.two_opt.verbose,'eta',cfg.matrix.eta);
+                r2 = apply_common_two_opt(I,problem,opt2);
+                v.refined{rr} = r2;
+                v.refined_jcommon(rr) = r2.metrics_after.common_objective;
+                v.local_time(rr) = r2.time;
+            end
+        end
+        v.valid_ids = find(v.valid & isfinite(v.raw_jcommon));
+        if isempty(v.valid_ids), error('Lp-raw has no valid candidate.'); end
+        [~,idx] = min(v.raw_jcommon(v.valid_ids));
+        v.best_raw_id = v.valid_ids(idx);
+        if cfg.lp.use_common_2opt
+            [~,idx] = min(v.refined_jcommon(v.valid_ids));
+            v.best_refined_id = v.valid_ids(idx);
+        else
+            v.best_refined_id = NaN;
+        end
+        % v.solve_time is shared with Lp-Alg2 (including its N2 calls).
+        % This is NOT an independently measured no-N2 solver runtime.
     end
 
     function outvar = run_variant(label,do_internal_local_search)

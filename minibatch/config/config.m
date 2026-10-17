@@ -400,24 +400,36 @@ cfg.mmdlp.exact_audit = false;
 cfg.mmdlp.exact_audit_max_q = 16;
 
 %% ========================================================================
-% Vector baseline
+% Vector baseline (Matrix-matched ADMM settings)
 % ========================================================================
 
-cfg.vector.eta = 0.001;
+% Parameter inheritance belongs to the configuration layer. The Vector
+% experiment should use cfg.vector directly, without overriding it at run time.
+% Adjust cfg.matrix BEFORE this block if both methods should use new values.
+cfg.vector = cfg.matrix;
 
-cfg.vector.beta = 100;
+% Map Matrix's named implementation flags to the Vector kernel's flags.
+cfg.vector.fast_prox = logical(cfg.vector.matrix_clean_fast);
+cfg.vector.clean_fast = logical(cfg.vector.matrix_clean);
+cfg.vector.support_tol = cfg.vector.partition_support_tol;
 
-cfg.vector.max_iter = 2000;
+% The Vector kernel supports fixed/adaptive beta exactly as graph/Vector.
+if ~logical(cfg.vector.use_adaptive_beta)
+    cfg.vector.beta_mode = "fixed";
+end
 
-cfg.vector.epsi = 1e-8;
+% Recompute eta_max for each remaining-group Z after Z normalization:
+% eta_max = 4*norm(Z/max(1,norm(Z,inf)),2)*(1+1e-6).
+% Set a scalar here if a FIXED cap is desired for every group.
+cfg.vector.eta_max = [];
 
-cfg.vector.print_every = 100;
-
+% Vector-specific experiment settings. Modify these independently of Matrix.
 cfg.vector.seed = 17001;
-
 cfg.vector.use_common_2opt = true;
-
-cfg.vector.fallback = "topk";
+cfg.vector.fallback = "topk";  % "topk" or "error" (native only)
+cfg.vector.print_group_every = 10;
+% cfg.vector.print_every = 1000;
+% cfg.vector.clean_fast = false;
 
 %% ========================================================================
 % Random baseline

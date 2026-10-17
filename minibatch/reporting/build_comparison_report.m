@@ -13,6 +13,7 @@ function report = build_comparison_report(results, problem, cfg)
     M = results.matrix;
     L = results.lp;
     LA = L.alg2;
+    LR = L.raw_pre_n2; % shares the Alg2 solve, pre-N2 discrete incumbent
     LB = L.bs;
     R = results.random;
     E = results.eadmm;
@@ -71,6 +72,9 @@ function report = build_comparison_report(results, problem, cfg)
 
     if LA.enabled
         add_lp_variant_rows(LA,'Lp-Alg2','Algorithm 2');
+    end
+    if LR.enabled
+        add_lp_variant_rows(LR,'Lp-raw','shared Alg2 trajectory; before N2');
     end
     if LB.enabled
         add_lp_variant_rows(LB,'Lp-bs','basic/no internal N2');
@@ -156,6 +160,13 @@ function report = build_comparison_report(results, problem, cfg)
             After2optMeanJCommon,After2optStdJCommon,After2optBestJCommon, ...
             'Lp Algorithm 2',LA,cfg.lp.use_common_2opt);
     end
+    if LR.enabled
+        [Family,NumStarts,RawMeanJCommon,RawStdJCommon,RawBestJCommon, ...
+            After2optMeanJCommon,After2optStdJCommon,After2optBestJCommon] = ...
+            append_family(Family,NumStarts,RawMeanJCommon,RawStdJCommon,RawBestJCommon, ...
+            After2optMeanJCommon,After2optStdJCommon,After2optBestJCommon, ...
+            'Lp-raw (shared Alg2)',LR,cfg.lp.use_common_2opt);
+    end
     if LB.enabled
         [Family,NumStarts,RawMeanJCommon,RawStdJCommon,RawBestJCommon, ...
             After2optMeanJCommon,After2optStdJCommon,After2optBestJCommon] = ...
@@ -210,6 +221,7 @@ function report = build_comparison_report(results, problem, cfg)
     BudgetSec=cfg.reporting.time_budgets(:);
     MatrixBestJCommon=nan(size(BudgetSec));
     LpAlg2BestJCommon=nan(size(BudgetSec));
+    LpRawBestJCommon=nan(size(BudgetSec));
     LpBsBestJCommon=nan(size(BudgetSec));
     eADMMBestJCommon=nan(size(BudgetSec));
     RandomBestJCommon=nan(size(BudgetSec));
@@ -226,6 +238,11 @@ function report = build_comparison_report(results, problem, cfg)
             la_times=cumsum(LA.solve_time(laids)+LA.local_time(laids));
             la_best=cummin(LA.refined_jcommon(laids));
         end
+        if LR.enabled && cfg.lp.use_common_2opt
+            lrids=LR.valid_ids;
+            lr_times=cumsum(LR.solve_time(lrids)+LR.local_time(lrids));
+            lr_best=cummin(LR.refined_jcommon(lrids));
+        end
         if LB.enabled && cfg.lp.use_common_2opt
             lbids=LB.valid_ids;
             lb_times=cumsum(LB.solve_time(lbids)+LB.local_time(lbids));
@@ -238,12 +255,15 @@ function report = build_comparison_report(results, problem, cfg)
             if LA.enabled && cfg.lp.use_common_2opt
                 LpAlg2BestJCommon(q)=best_at_time_budget(la_times,la_best,BudgetSec(q));
             end
+            if LR.enabled && cfg.lp.use_common_2opt
+                LpRawBestJCommon(q)=best_at_time_budget(lr_times,lr_best,BudgetSec(q));
+            end
             if LB.enabled && cfg.lp.use_common_2opt
                 LpBsBestJCommon(q)=best_at_time_budget(lb_times,lb_best,BudgetSec(q));
             end
         end
     end
-    time_budget_table=table(BudgetSec,MatrixBestJCommon,LpAlg2BestJCommon,LpBsBestJCommon, ...
+    time_budget_table=table(BudgetSec,MatrixBestJCommon,LpAlg2BestJCommon,LpRawBestJCommon,LpBsBestJCommon, ...
         eADMMBestJCommon,RandomBestJCommon);
 
     % Solver-level iteration timing / N-time normalization.
@@ -286,6 +306,7 @@ function report = build_comparison_report(results, problem, cfg)
         MeanSolveTimeSec,AvgTimePerIterSec,TimePerNSec,NPerSec);
 
     % Detailed Lp component profiling. Times are aggregated over valid starts.
+    % Do not duplicate the Alg2 solve/N2 component row for shared Lp-raw.
     LpVariant={}; TotalTimeSec=[]; ProjectionTimeSec=[]; RegEvalTimeSec=[];
     LineSearchTimeSec=[]; RoundingTimeSec=[]; InternalN2TimeSec=[];
     ObjectiveOnlyTimeSec=[]; OtherTimeSec=[]; ProjectionCalls=[]; DualBBIterations=[];

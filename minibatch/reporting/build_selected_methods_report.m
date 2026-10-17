@@ -125,6 +125,14 @@ function report = build_selected_methods_report(results,problem,cfg)
                 'Lp-Alg2');
         end
 
+        if isfield(L,'raw_pre_n2') && ...
+                L.raw_pre_n2.enabled
+
+            add_lp_variant( ...
+                L.raw_pre_n2, ...
+                'Lp-raw');
+        end
+
         if isfield(L,'bs') && ...
                 L.bs.enabled
 
