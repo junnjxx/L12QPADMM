@@ -53,7 +53,7 @@ fprintf('[Matrix backend] PURE MATLAB\n');
 fprintf('[Matrix tau_X] %.6g\n',opts.tau_X);
 fprintf('============================================================\n');
 A=problem.A;
-A = A/norm(A,2)^2;
+
 G=problem.G;
 normA2=norm(A,2);
 opts.eta_max=4*normA2*(1+1e-6);

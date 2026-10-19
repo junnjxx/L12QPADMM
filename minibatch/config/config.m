@@ -16,7 +16,9 @@ function cfg = config()
 %   Batch100_4
 %       N = 100
 %       batch size = 4
-%
+%.  Batch100_10
+%       N = 100
+%       batch size = 10
 %   Batch500_10
 %       N = 500
 %       batch size = 10
@@ -33,13 +35,13 @@ cfg = struct();
 %% ========================================================================
 % Experiment profile
 % ========================================================================
-cfg.exp.profile = "Batch100_4";
+cfg.exp.profile = "Batch500_10";
 %% ========================================================================
 % Methods to run
 % ========================================================================
 
 cfg.methods.run = ["Matrix","eADMM","Lp","Vector","MMDLP"];
-%cfg.methods.run = ["eADMM"];
+cfg.methods.run = ["Matrix","Vector"];
 %% ========================================================================
 % Matrix clean mode
 % ========================================================================
@@ -64,6 +66,21 @@ switch string(cfg.exp.profile)
         cfg.data.group_sizes =  [20,25,33,22];
         cfg.data.dim_x = 100;
         cfg.batch.size = 4;
+        cfg.matrix.c = 10;
+        cfg.matrix.beta0 = 10;
+        cfg.matrix.tau_X = 1e-5;
+        cfg.matrix.eta_stage_initial = -10;
+        cfg.matrix.eta = 0.001;
+        cfg.matrix.eta_stagnation_iters = 100;
+        cfg.matrix.eta_growth_factor = 1.5;
+        cfg.matrix.kabeta = 1000000;
+    case "Batch100_10"
+
+        cfg.data.profile = "custom";
+
+        cfg.data.group_sizes =  [9,8,9,9,8,9,13,10,12,13];
+        cfg.data.dim_x = 100;
+        cfg.batch.size = 10;
         cfg.matrix.c = 10;
         cfg.matrix.beta0 = 10;
         cfg.matrix.tau_X = 1e-5;
@@ -430,7 +447,8 @@ cfg.vector.fallback = "topk";  % "topk" or "error" (native only)
 cfg.vector.print_group_every = 10;
 % cfg.vector.print_every = 1000;
 % cfg.vector.clean_fast = false;
-
+cfg.vector.c=100;
+cfg.vector.beta0 = 100;
 %% ========================================================================
 % Random baseline
 % ========================================================================

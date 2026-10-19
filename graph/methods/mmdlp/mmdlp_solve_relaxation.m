@@ -203,39 +203,167 @@ function [m_relaxed,info] = mmdlp_solve_relaxation(Z,k,opts)
     lb = zeros(n_var,1);
     ub = ones(n_var,1);
 
-    lp_opts = optimoptions( ...
-        'linprog', ...
-        'Display',opts.display);
+    % ------------------------------------------------------------
+% LP solver options
+% ------------------------------------------------------------
+
+% Display level
+    if isfield(opts, 'linprog_display') && ...
+            ~isempty(opts.linprog_display)
+        display_level = opts.linprog_display;
+    elseif isfield(opts, 'display') && ...
+            ~isempty(opts.display)
+        display_level = opts.display;
+    else
+        display_level = 'none';
+    end
+
+   lp_opts = optimoptions( ...
+    'linprog', ...
+    'Display', opts.display);
+
+    if isfield(opts, 'algorithm') && ~isempty(opts.algorithm)
+        lp_opts.Algorithm = opts.algorithm;
+    end
+
+    fprintf('[MMDLP LP] algorithm=%s\n', ...
+        char(string(lp_opts.Algorithm)));
+
+
+    % Maximum iteration count
+    if isfield(opts, 'max_iterations') && ...
+            ~isempty(opts.max_iterations)
+        lp_opts.MaxIterations = opts.max_iterations;
+    end
+
+    % Maximum wall-clock time, in seconds
+    if isfield(opts, 'max_time') && ...
+            ~isempty(opts.max_time)
+        if isprop(lp_opts, 'MaxTime')
+            lp_opts.MaxTime = opts.max_time;
+        else
+            warning(['This MATLAB version does not expose MaxTime ', ...
+                    'for the current linprog options.']);
+        end
+    end
 
     model_build_time = toc(model_tic);
 
+    
     %% ============================================================
-    % Actual LP solve
+    % Actual LP solve with detailed failure diagnostics
     % ============================================================
-
+    fprintf(['\n[MMDLP LP START] %s | q=%d | k=%d | ', ...
+        'vars=%d | ineq=%d | model_build=%.2fs\n'], ...
+        datestr(now, 'yyyy-mm-dd HH:MM:SS'), ...
+        q, k, n_var, n_ineq, model_build_time);
+drawnow;
     solve_tic = tic;
 
-    [x,fval,exitflag,output,lambda] = ...
-        linprog( ...
-            f, ...
-            A,b, ...
-            Aeq,beq, ...
-            lb,ub, ...
-            lp_opts);
+    try
+        [x, fval, exitflag, output, lambda] = ...
+            linprog( ...
+                f, ...
+                A, b, ...
+                Aeq, beq, ...
+                lb, ub, ...
+                lp_opts);
+
+    catch ME
+        % MATLAB/linprog threw an exception, e.g., a solver or
+        % allocation error that MATLAB was able to catch.
+        solve_time = toc(solve_tic);
+
+        fprintf(2, '\n[MMDLP LP EXCEPTION]\n');
+        fprintf(2, 'q=%d, k=%d, variables=%d, inequalities=%d\n', ...
+            q, k, n_var, n_ineq);
+        fprintf(2, 'Elapsed time = %.4f seconds\n', solve_time);
+        fprintf(2, 'Exception identifier: %s\n', ME.identifier);
+        fprintf(2, 'Full MATLAB exception report:\n%s\n', ...
+            getReport(ME, 'extended', 'hyperlinks', 'off'));
+
+        % Preserve the original exception and stack.
+        rethrow(ME);
+    end
 
     solve_time = toc(solve_tic);
 
-    if isempty(x) || exitflag <= 0
+    %% ------------------------------------------------------------
+    % Extract solver diagnostics
+    % ------------------------------------------------------------
+
+    output_message = '(output.message unavailable)';
+    output_iterations = NaN;
+    output_algorithm = '(unknown)';
+
+    if isstruct(output)
+        if isfield(output, 'message') && ~isempty(output.message)
+            output_message = char(string(output.message));
+        end
+
+        if isfield(output, 'iterations') && ...
+                ~isempty(output.iterations)
+            output_iterations = output.iterations;
+        end
+
+        if isfield(output, 'algorithm') && ...
+                ~isempty(output.algorithm)
+            output_algorithm = char(string(output.algorithm));
+        end
+    end
+
+    exitflag_print = NaN;
+    if isnumeric(exitflag) && isscalar(exitflag) && ...
+            isfinite(exitflag)
+        exitflag_print = exitflag;
+    end
+
+    %% ------------------------------------------------------------
+    % Fail explicitly, preserving the full solver diagnostics
+    % ------------------------------------------------------------
+
+    if isempty(x) || ~isfinite(exitflag_print) || exitflag_print <= 0
+
+        fprintf(2, '\n[MMDLP LP FAILURE]\n');
+        fprintf(2, ...
+            'q=%d, k=%d, variables=%d, inequalities=%d\n', ...
+            q, k, n_var, n_ineq);
+        fprintf(2, 'exitflag = %g\n', exitflag_print);
+        fprintf(2, 'fval = %.12g\n', fval);
+        fprintf(2, 'algorithm = %s\n', output_algorithm);
+        fprintf(2, 'iterations = %g\n', output_iterations);
+        fprintf(2, 'solve_time = %.4f seconds\n', solve_time);
+        fprintf(2, 'linprog output.message:\n%s\n', output_message);
+
+        fprintf(2, 'Full linprog output structure:\n');
+        disp(output);
+
         error('mmdlp_solve_relaxation:LinprogFailure', ...
-            ['linprog failed. exitflag=%d. ', ...
-             'See solver output for details.'], ...
-            exitflag);
+            ['linprog failed or returned no usable solution.\n', ...
+            'exitflag=%g, q=%d, k=%d, variables=%d, ', ...
+            'inequalities=%d, solve_time=%.4f seconds.\n', ...
+            'algorithm=%s, iterations=%g.\n', ...
+            'linprog message:\n%s'], ...
+            exitflag_print, q, k, n_var, n_ineq, solve_time, ...
+            output_algorithm, output_iterations, output_message);
     end
 
     if any(~isfinite(x))
+        fprintf(2, '\n[MMDLP LP FAILURE: NONFINITE SOLUTION]\n');
+        fprintf(2, 'exitflag = %g\n', exitflag_print);
+        fprintf(2, 'q=%d, k=%d, variables=%d, inequalities=%d\n', ...
+            q, k, n_var, n_ineq);
+        fprintf(2, 'solve_time = %.4f seconds\n', solve_time);
+        fprintf(2, 'linprog output.message:\n%s\n', output_message);
+        disp(output);
+
         error('mmdlp_solve_relaxation:NonfiniteSolution', ...
-            'linprog returned NaN/Inf.');
+            ['linprog returned NaN/Inf in x.\n', ...
+            'exitflag=%g, q=%d, k=%d, solve_time=%.4f seconds.\n', ...
+            'linprog message:\n%s'], ...
+            exitflag_print, q, k, solve_time, output_message);
     end
+
 
     %% ============================================================
     % Post-solve extraction and diagnostics

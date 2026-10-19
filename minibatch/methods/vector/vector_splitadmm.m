@@ -34,8 +34,8 @@ function [X,Y,iter,info]=vector_splitadmm(A,b,opt,X1,Y1)
     end
     clean_fast=logical(opt.clean_fast);
 
-    objective_scale=max(1,norm(A,inf));
-    A=A/objective_scale;
+    %objective_scale=max(1,norm(A,inf));
+    %A=A/objective_scale;
     G=zeros(n,1); % Minibatch Z absorbs the stage-dependent linear term
     N=n;
     X=X1;
@@ -188,7 +188,7 @@ function [X,Y,iter,info]=vector_splitadmm(A,b,opt,X1,Y1)
     Pnative=round(X);
     native_valid=max(abs(X(:)-Pnative(:)))<=opt.support_tol && ...
         is_valid_cardinality(Pnative,N,b);
-    info=struct('objective_scale',objective_scale,'eta_max',eta_max, ...
+    info=struct('objective_scale',1,'eta_max',eta_max, ...
         'eta_final',eta_state,'beta_final',beta,'iterations',iter, ...
         'flag',flag,'residual_r',r,'residual_dxy',dxy, ...
         'nnzX',nnz(X),'binary_deviation',max(abs(X(:)-round(X(:)))), ...

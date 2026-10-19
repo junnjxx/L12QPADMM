@@ -11,9 +11,9 @@ cfg.graph.mat_path='';
 cfg.graph.variable='';
 cfg.graph.W=[];
 cfg.methods.run={'eADMM','Lp','MMDLP','Matrix','Vector'};
-cfg.methods.run={'Lp'};
+cfg.methods.run={'Vector'};
 % Matrix: exact same X-first, Y-affine updates as v3; only A=L/s_L.
-cfg.exp.profile = "rand50_1000_10"; %rand80_1000_10
+cfg.exp.profile = "rand80_500_10"; %rand80_1000_10
 cfg.matrix.clean_fast = true;
 switch string(cfg.exp.profile)
     case "rand20_100_10"
@@ -228,7 +228,7 @@ cfg.eadmm.met.sigma0=0.1;
 % Latest uploaded MMDLP LP relaxation (AAAI-21 Eq. 10), graph-adapted.
 % For each sequential group, Z=0.5*L(Q,Q), not the old MMD kernel Z.
 % Requires MATLAB Optimization Toolbox (linprog).
-cfg.mmdlp.linprog_display='none'; %final:只打印求解结束信息 iter:打印求解过程中的迭代进度
+cfg.mmdlp.linprog_display='iter'; %final:只打印求解结束信息 iter:打印求解过程中的迭代进度
 cfg.mmdlp.feasibility_tol=1e-7;
 cfg.mmdlp.verbose=true;
 cfg.mmdlp.print_group_every=1;
@@ -239,7 +239,10 @@ cfg.mmdlp.solution_mode = 'paper_topk'; %paper_topk, native_only
 cfg.mmdlp.support_tol = 1e-10;
 cfg.mmdlp.scale_input = true; % 按照vector的规则逐组进行缩放，报告时恢复原始目标值尺度
 cfg.mmdlp.clean_fast = false; %关闭逐组日志和松弛向量历史保存。
-
+cfg.mmdlp.algorithm = 'interior-point';
+% Safety limits for each linprog call
+cfg.mmdlp.max_time = 600;          % 10 minutes
+cfg.mmdlp.max_iterations = 200;
 % User's latest Vector method; graph subproblem uses A_g=L(Q,Q).
 % One group at a time, each group contains n/k vertices.
 cfg.vector = cfg.matrix;
